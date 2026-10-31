@@ -18,10 +18,11 @@ enum PlaybackStatus: Equatable {
 /// Owns the clips on the timeline, their audio analysis, the detected
 /// silences and the player.
 ///
-/// Import order per clip, so the video is on screen first:
+/// Import per clip:
 /// 1. Metadata (duration, orientation): milliseconds. The clip is placed.
-/// 2. The seamless composition is (re)built and handed to the player.
-/// 3. Audio levels stream in; the waveform and highlights refresh at most 20×/s.
+/// 2. In parallel: the seamless composition is (re)built for the player, and
+///    audio levels stream in (the waveform refreshes at most 20×/s). Neither
+///    waits for the other.
 ///
 /// Settings changes only re-run the pure silence detector over the stored
 /// levels, so highlights update instantly. Playback always skips silences.
@@ -197,11 +198,10 @@ final class EditorViewModel {
                 }
                 Log.importing.notice("\(name, privacy: .public): \(duration.seconds) s, \(Int(size.width))×\(Int(size.height))")
 
-                // 2. Playback first: build the composition before decoding audio.
+                // 2. Playback and thumbnail are prepared in their own tasks; the
+                //    waveform never waits for them.
                 rebuildPlayerItem()
                 loadThumbnail(clipID: clipID, asset: asset)
-                await compositionTask?.value
-                try Task.checkCancellation()
 
                 // 3. Audio levels, streamed in as segments finish.
                 for try await chunk in analyzer.levels(for: url) {

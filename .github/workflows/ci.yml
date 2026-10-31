@@ -71,7 +71,7 @@ jobs:
           ( n=0; while true; do
               sleep 6
               pid=$(pgrep -x "HT Edit" | head -1)
-              if [ -n "$pid" ]; then n=$((n+1)); sample "$pid" 1 -mayDie -file "samples/sample-$n.txt" >/dev/null 2>&1 || true; fi
+              if [ -n "$pid" ]; then n=$((n+1)); sudo sample "$pid" 1 -mayDie -file "samples/sample-$n.txt" >/dev/null 2>&1 || true; fi
             done ) &
           echo $! > sampler.pid
           xcodebuild test-without-building \
@@ -92,6 +92,30 @@ jobs:
           kill "$(cat log-stream.pid 2>/dev/null)" "$(cat sampler.pid 2>/dev/null)" 2>/dev/null || true
           echo "===== App log (ht.edit) during UI tests ====="
           head -300 app-ui.log 2>/dev/null || true
+          echo "===== Crash reports ====="
+          ls -t ~/Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.ips 2>/dev/null | grep -E "HT Edit|HT EditUITests" | head -4 | while IFS= read -r f; do
+            echo "--- $f ---"
+            python3 - "$f" <<'PY' || head -c 6000 "$f"
+          import json, sys
+          text = open(sys.argv[1]).read()
+          header, _, body = text.partition("\n")
+          report = json.loads(body)
+          ex = report.get("exception", {})
+          print("exception:", ex.get("type"), ex.get("signal"), ex.get("codes"), report.get("termination", {}).get("indicator"))
+          for key in ("asi", "lastExceptionBacktrace"):
+              if key in report: print(key, ":", json.dumps(report[key])[:1500])
+          images = report.get("usedImages", [])
+          faulting = report.get("faultingThread", 0)
+          for index, thread in enumerate(report.get("threads", [])):
+              if index != faulting and not thread.get("queue", "").endswith("main-thread"):
+                  continue
+              print(f"thread {index} queue={thread.get('queue')} triggered={thread.get('triggered')}")
+              for frame in thread.get("frames", [])[:40]:
+                  image = images[frame.get("imageIndex", 0)].get("name", "?") if images else "?"
+                  print("   ", image, frame.get("symbol", hex(frame.get("imageOffset", 0))), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+          PY
+          done
+          cp ~/Library/Logs/DiagnosticReports/*HT* samples/ 2>/dev/null || true
           echo "===== App main-thread samples during UI tests ====="
           for f in $(ls samples/*.txt 2>/dev/null | sort -V); do
             echo "--- $f ---"
