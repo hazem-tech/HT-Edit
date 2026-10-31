@@ -54,7 +54,7 @@ final class HT_EditUITests: XCTestCase {
     @MainActor
     private func launchWithFixture(_ kinds: String...) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITestFixture"] + kinds
+        app.launchArguments = ["-UITestFixture", kinds.joined(separator: ",")]
         app.launch()
         return app
     }

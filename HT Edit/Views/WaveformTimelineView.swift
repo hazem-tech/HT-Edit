@@ -16,26 +16,23 @@ struct WaveformTimelineView: View {
 
     @State private var zoom: Double = 1
     @State private var zoomAtGestureStart: Double?
-    @State private var viewport = Viewport()
+    /// Horizontal scroll offset of the visible slice, in points.
+    @State private var scrollOffset: CGFloat = 0
     @State private var scrollPosition = ScrollPosition(edge: .leading)
 
     static let zoomRange: ClosedRange<Double> = 1...400
-
-    struct Viewport: Equatable {
-        var offset: CGFloat = 0
-        var width: CGFloat = 0
-    }
 
     private var durationSeconds: Double {
         let seconds = model.timelineDuration.seconds
         return seconds.isFinite && seconds > 0 ? seconds : 1
     }
 
-    /// Width available to the timeline, measured *outside* the scroll view so the
-    /// scroll content (sized from it) can never feed back into the layout.
+    /// Width available to the timeline: the single source of truth for both the
+    /// scroll content width and the visible width. Whole points only, so the
+    /// content never exceeds the container by a fraction and re-triggers layout.
     @State private var availableWidth: CGFloat = 0
 
-    private var contentWidth: CGFloat { max(availableWidth, 1) * zoom }
+    private var contentWidth: CGFloat { (max(availableWidth, 1) * zoom).rounded(.down) }
     private var pixelsPerSecond: CGFloat { contentWidth / durationSeconds }
 
     var body: some View {
@@ -44,8 +41,8 @@ struct WaveformTimelineView: View {
         #endif
         VStack(alignment: .leading, spacing: 8) {
             timeline
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                    availableWidth = width
+                .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded(.down) } action: { width in
+                    if abs(width - availableWidth) >= 1 { availableWidth = width }
                 }
             zoomControl
         }
@@ -64,25 +61,24 @@ struct WaveformTimelineView: View {
                 )
         }
         .scrollPosition($scrollPosition)
-        .onScrollGeometryChange(for: Viewport.self) { geometry in
-            Viewport(offset: geometry.contentOffset.x, width: geometry.containerSize.width)
-        } action: { _, newValue in
-            viewport = newValue
+        // Only the offset comes from the scroll view; widths come from `availableWidth`.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x.rounded() } action: { _, newValue in
+            scrollOffset = newValue
         }
         .background {
             WaveformCanvas(
                 lanes: model.lanes,
                 silences: model.silences,
                 thresholdDB: model.settings.thresholdDB,
-                offset: viewport.offset,
+                offset: scrollOffset,
                 pixelsPerSecond: pixelsPerSecond
             )
         }
         .overlay(alignment: .leading) {
             PlayheadOverlay(
                 model: model,
-                offset: viewport.offset,
-                viewportWidth: viewport.width,
+                offset: scrollOffset,
+                viewportWidth: availableWidth,
                 pixelsPerSecond: pixelsPerSecond,
                 scrollPosition: $scrollPosition
             )
@@ -132,7 +128,7 @@ struct WaveformTimelineView: View {
         let clamped = min(Self.zoomRange.upperBound, max(Self.zoomRange.lowerBound, newZoom))
         guard clamped != zoom else { return }
         let playhead = model.currentTime.seconds.isFinite ? model.currentTime.seconds : 0
-        let screenX = CGFloat(playhead) * pixelsPerSecond - viewport.offset
+        let screenX = CGFloat(playhead) * pixelsPerSecond - scrollOffset
         zoom = clamped
         let newOffset = CGFloat(playhead) * pixelsPerSecond - screenX
         scrollPosition.scrollTo(x: max(0, newOffset))

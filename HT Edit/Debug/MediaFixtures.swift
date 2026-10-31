@@ -243,14 +243,16 @@ nonisolated enum MediaFixtures {
     }
 }
 
-/// Imports a generated fixture when UI tests launch the app with `-UITestFixture <kind>`.
+/// Imports generated fixtures when UI tests launch the app with
+/// `-UITestFixture kind[,kind…]`. (One comma-separated value: AppKit treats any
+/// extra bare launch argument as a file to open and then skips the main window.)
 enum UITestSupport {
     static func importFixtureIfRequested(into model: EditorViewModel) async {
         let arguments = ProcessInfo.processInfo.arguments
-        guard let flag = arguments.firstIndex(of: "-UITestFixture") else { return }
-        let kinds = arguments.dropFirst(flag + 1)
-            .prefix { !$0.hasPrefix("-") }
-            .compactMap(MediaFixtures.Kind.init(rawValue:))
+        guard let flag = arguments.firstIndex(of: "-UITestFixture"), flag + 1 < arguments.count else { return }
+        let kinds = arguments[flag + 1]
+            .split(separator: ",")
+            .compactMap { MediaFixtures.Kind(rawValue: String($0)) }
         let directory = FileManager.default.temporaryDirectory.appending(path: "UITestFixtures", directoryHint: .isDirectory)
         var urls: [URL] = []
         for kind in kinds.isEmpty ? [.h264Landscape] : Array(kinds) {
