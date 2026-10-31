@@ -216,7 +216,7 @@ final class EditorViewModel {
                 let wasPlaying = isPlaying
                 player.replaceCurrentItem(with: item)
                 if time > .zero {
-                    player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                    _ = await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
                 }
                 if wasPlaying { player.play() }
             } catch is CancellationError {

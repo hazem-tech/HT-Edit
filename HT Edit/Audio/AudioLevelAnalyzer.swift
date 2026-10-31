@@ -184,7 +184,6 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             AVLinearPCMIsBigEndianKey: false,
             AVLinearPCMIsNonInterleaved: true,
         ])
-        output.alwaysCopiesSampleData = false
         let provider = reader.outputProvider(for: output)
         try reader.start()
         defer {
