@@ -16,16 +16,14 @@ struct Clip: Identifiable {
     var duration: CMTime = .zero
     /// Display size with the track's rotation applied; `.zero` for audio-only files.
     var presentationSize: CGSize = .zero
-    var levels: AudioLevels = .empty
     var isAnalyzing = true
     var thumbnail: CGImage?
 
-    init(id: UUID = UUID(), url: URL, name: String? = nil, duration: CMTime = .zero, levels: AudioLevels = .empty) {
+    init(id: UUID = UUID(), url: URL, name: String? = nil, duration: CMTime = .zero) {
         self.id = id
         self.url = url
         self.name = name ?? url.lastPathComponent
         self.duration = duration
-        self.levels = levels
     }
 
     var isPlaced: Bool { duration.isNumeric && duration > .zero }

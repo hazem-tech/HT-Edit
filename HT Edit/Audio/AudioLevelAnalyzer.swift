@@ -10,12 +10,18 @@ nonisolated enum AnalysisError: LocalizedError, Equatable {
     case noAudioTrack
     case unsupportedFormat
     case readerFailed(String)
+    /// A reader stopped delivering audio (a known AVFoundation failure mode).
+    case stalled
+    /// A segment produced no audio at all.
+    case emptySegment
 
     var errorDescription: String? {
         switch self {
         case .noAudioTrack: "This file has no audio track."
         case .unsupportedFormat: "The audio format of this file isn't supported."
         case .readerFailed(let reason): "Couldn't read the audio: \(reason)"
+        case .stalled: "Reading the audio stopped responding."
+        case .emptySegment: "Part of the audio couldn't be read."
         }
     }
 }
@@ -23,8 +29,11 @@ nonisolated enum AnalysisError: LocalizedError, Equatable {
 /// Decodes the first audio track of a media file and measures its loudness
 /// in fixed windows, streaming results as they become available.
 ///
-/// - The track is split into window-aligned segments decoded **in parallel**,
-///   one `AVAssetReader` per core, using the async `AVAssetReaderOutput.Provider` API.
+/// - The track is split into window-aligned segments decoded **in parallel**
+///   with the async `AVAssetReaderOutput.Provider` API. A shared
+///   `ReaderLimiter` caps readers across all clips so playback stays smooth.
+/// - Every reader runs under a `StallWatchdog`. If a segmented read stalls or
+///   fails, the whole track is re-read with one reader; analysis always ends.
 /// - Every segment emits its first windows immediately, so the waveform appears
 ///   at several places at once and fills in.
 /// - All DSP (downmix, RMS, peak, dB conversion) runs through Accelerate/vDSP.
@@ -34,19 +43,23 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
     var windowDuration: Double = 0.010
     /// Minimum wall-clock time between chunks from one segment. `.zero` emits after every decoded buffer.
     var chunkInterval: Duration = .milliseconds(50)
-    /// Number of parallel readers; `nil` picks one per core (short files use one).
+    /// Number of parallel segments; `nil` uses the reader limit (short files use one).
     var segmentCount: Int?
     /// Shortest segment worth its own reader, in windows.
     var minimumWindowsPerSegment = AudioSegmentPlanner.minimumWindowsPerSegment
     /// On-disk cache of finished analyses; `nil` disables caching.
     var cache: LevelsCache? = .shared
+    /// Shared cap on concurrently running readers.
+    var limiter: ReaderLimiter = .shared
+    /// A reader that delivers nothing for this long is abandoned.
+    var stallTimeout: Duration = .seconds(8)
 
     /// Streams level chunks for the file at `url`. Cancelling the consuming task
     /// (or dropping the stream) stops decoding.
     func levels(for url: URL) -> AsyncThrowingStream<AudioLevelsChunk, any Error> {
         let analyzer = self
         return AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task(priority: .utility) {
                 do {
                     try await analyzer.analyze(url: url) { continuation.yield($0) }
                     continuation.finish()
@@ -70,7 +83,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
 
     // MARK: Pipeline
 
-    private struct TrackLayout: Sendable {
+    struct TrackLayout: Sendable {
         var sampleRate: Int32
         var framesPerWindow: Int
         var totalFrames: Int
@@ -80,8 +93,16 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
 
     @concurrent
     private func analyze(url: URL, emit: @escaping @Sendable (AudioLevelsChunk) -> Void) async throws {
+        let name = url.lastPathComponent
+        let signpostID = Log.signposter.makeSignpostID()
+        let interval = Log.signposter.beginInterval("Analyze audio", id: signpostID)
+        defer { Log.signposter.endInterval("Analyze audio", interval) }
+        let clock = ContinuousClock()
+        let started = clock.now
+
         let cacheKey = cache.flatMap { _ in LevelsCache.key(for: url, windowDuration: windowDuration) }
         if let cache, let cacheKey, let cached = await cache.load(key: cacheKey) {
+            Log.analysis.info("\(name, privacy: .public): served from cache")
             emit(AudioLevelsChunk(
                 sampleRate: cached.sampleRate,
                 framesPerWindow: cached.framesPerWindow,
@@ -95,42 +116,80 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
         }
 
         let layout = try await Self.layout(of: url, windowDuration: windowDuration)
-        guard layout.totalWindows > 0 else { return }
+        guard layout.totalWindows > 0 else {
+            Log.analysis.info("\(name, privacy: .public): empty audio track")
+            return
+        }
 
         let segments = AudioSegmentPlanner.segments(
             totalWindows: layout.totalWindows,
-            count: segmentCount ?? AudioSegmentPlanner.defaultSegmentCount,
+            count: segmentCount ?? limiter.limit,
             minimumWindowsPerSegment: minimumWindowsPerSegment
         )
-        let chunkInterval = chunkInterval
+        Log.analysis.info("\(name, privacy: .public): \(layout.totalWindows) windows at \(layout.sampleRate) Hz in \(segments.count) segment(s)")
 
-        var levels = AudioLevels.empty
-        try await withThrowingTaskGroup(of: AudioLevelsChunk.self) { group in
-            for segment in segments {
-                group.addTask {
-                    try await Self.decode(
-                        url: url,
-                        windows: segment,
-                        isLast: segment.upperBound == layout.totalWindows,
-                        layout: layout,
-                        chunkInterval: chunkInterval,
-                        emit: emit
-                    )
-                }
-            }
-            for try await segmentResult in group {
-                levels.apply(segmentResult)
-            }
+        var levels: AudioLevels
+        do {
+            levels = try await decode(url: url, segments: segments, layout: layout, emit: emit)
+        } catch let error where segments.count > 1 && !(error is CancellationError) {
+            // Parallel reads failed or stalled: re-read the whole track with one reader.
+            Log.analysis.error("\(name, privacy: .public): segmented read failed (\(error.localizedDescription, privacy: .public)); falling back to one reader")
+            levels = try await decode(url: url, segments: [0..<layout.totalWindows], layout: layout, emit: emit)
         }
 
         try Task.checkCancellation()
+        Log.analysis.info("\(name, privacy: .public): analyzed in \((clock.now - started).description, privacy: .public)")
         if let cache, let cacheKey {
             levels.isComplete = true
             await cache.store(levels, key: cacheKey)
         }
     }
 
-    private static func layout(of url: URL, windowDuration: Double) async throws -> TrackLayout {
+    /// Decodes `segments` concurrently (bounded by the limiter) and returns the assembled levels.
+    private func decode(
+        url: URL,
+        segments: [Range<Int>],
+        layout: TrackLayout,
+        emit: @escaping @Sendable (AudioLevelsChunk) -> Void
+    ) async throws -> AudioLevels {
+        let limiter = limiter
+        let chunkInterval = chunkInterval
+        let stallTimeout = stallTimeout
+
+        var levels = AudioLevels.empty
+        try await withThrowingTaskGroup(of: AudioLevelsChunk.self) { group in
+            for segment in segments {
+                group.addTask {
+                    await limiter.acquire()
+                    let progress = ProgressMarker()
+                    do {
+                        let result = try await StallWatchdog.run(timeout: stallTimeout, progress: progress) {
+                            try await Self.decodeSegment(
+                                url: url,
+                                windows: segment,
+                                isLast: segment.upperBound == layout.totalWindows,
+                                layout: layout,
+                                chunkInterval: chunkInterval,
+                                progress: progress,
+                                emit: emit
+                            )
+                        }
+                        await limiter.release()
+                        return result
+                    } catch {
+                        await limiter.release()
+                        throw error
+                    }
+                }
+            }
+            for try await segmentResult in group {
+                levels.apply(segmentResult)
+            }
+        }
+        return levels
+    }
+
+    static func layout(of url: URL, windowDuration: Double) async throws -> TrackLayout {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw AnalysisError.noAudioTrack
@@ -154,12 +213,13 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
     /// Decodes one segment, emitting progress chunks, and returns the whole segment
     /// padded/trimmed to exactly `windows.count` windows so timings stay exact.
     @concurrent
-    private static func decode(
+    private static func decodeSegment(
         url: URL,
         windows: Range<Int>,
         isLast: Bool,
         layout: TrackLayout,
         chunkInterval: Duration,
+        progress: ProgressMarker,
         emit: @Sendable (AudioLevelsChunk) -> Void
     ) async throws -> AudioLevelsChunk {
         let asset = AVURLAsset(url: url)
@@ -211,8 +271,11 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             )
         }
 
+        var decodedFrames = 0
         while rms.count < windows.count, let sampleBuffer = try await provider.next() {
             try Task.checkCancellation()
+            progress.touch()
+            decodedFrames += sampleBuffer.sampleCount
             try sampleBuffer.withUnsafeSampleBuffer { buffer in
                 try accumulator.consume(buffer)
             }
@@ -231,6 +294,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             throw AnalysisError.readerFailed(reader.error?.localizedDescription ?? "Unknown error")
         }
         try Task.checkCancellation()
+        guard decodedFrames > 0 else { throw AnalysisError.emptySegment }
 
         let emittedCount = rms.count
         if let batch = accumulator.finish() {

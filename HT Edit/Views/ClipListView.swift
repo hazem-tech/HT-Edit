@@ -5,15 +5,19 @@
 
 import SwiftUI
 
-/// Sidebar listing the clips in timeline order. Drag rows to reorder.
+/// Sidebar listing the clips in timeline order.
+/// Drag rows to reorder; right-click ▸ Delete or press Delete to remove.
 struct ClipListView: View {
     let model: EditorViewModel
+    @State private var selection = Set<Clip.ID>()
 
     var body: some View {
-        List {
+        List(selection: $selection) {
             Section("Clips") {
                 ForEach(model.clips) { clip in
                     ClipRow(clip: clip)
+                        .tag(clip.id)
+                        .accessibilityIdentifier("clipRow")
                 }
                 .onMove { offsets, destination in
                     model.moveClips(fromOffsets: offsets, toOffset: destination)
@@ -21,6 +25,16 @@ struct ClipListView: View {
             }
         }
         .listStyle(.sidebar)
+        .contextMenu(forSelectionType: Clip.ID.self) { ids in
+            if !ids.isEmpty {
+                Button(ids.count == 1 ? "Delete Clip" : "Delete \(ids.count) Clips", systemImage: "trash", role: .destructive) {
+                    delete(ids)
+                }
+            }
+        }
+        .onDeleteCommand {
+            delete(selection)
+        }
         .accessibilityIdentifier("clipList")
         .overlay {
             if model.clips.isEmpty {
@@ -28,6 +42,11 @@ struct ClipListView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func delete(_ ids: Set<Clip.ID>) {
+        model.removeClips(ids)
+        selection.subtract(ids)
     }
 }
 

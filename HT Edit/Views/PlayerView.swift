@@ -3,44 +3,27 @@
 //  HT Edit
 //
 
-import AppKit
-import AVFoundation
+import AVKit
 import SwiftUI
 
-/// Bare `AVPlayerLayer` host: no built-in controls or overlays, the lightest
-/// way to put video on screen. Transport and scrubbing live in the timeline.
+/// AVKit's `AVPlayerView` with its built-in controls turned off: Apple's
+/// supported way to put a player on screen in AppKit. Transport and scrubbing
+/// live in the timeline.
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
 
-    func makeNSView(context: Context) -> PlayerLayerView {
-        let view = PlayerLayerView()
-        view.playerLayer.player = player
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        view.allowsPictureInPicturePlayback = false
+        view.player = player
         return view
     }
 
-    func updateNSView(_ view: PlayerLayerView, context: Context) {
-        if view.playerLayer.player !== player {
-            view.playerLayer.player = player
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player {
+            view.player = player
         }
-    }
-}
-
-final class PlayerLayerView: NSView {
-    let playerLayer = AVPlayerLayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.backgroundColor = NSColor.black.cgColor
-        wantsLayer = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported")
-    }
-
-    override func makeBackingLayer() -> CALayer {
-        playerLayer
     }
 }

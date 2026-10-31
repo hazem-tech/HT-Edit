@@ -19,6 +19,8 @@ struct ContentView: View {
             ClipListView(model: model)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
         } detail: {
+            // Toolbar, file importer and alert live inside the detail column:
+            // presentations attached outside a split view's columns may never show on macOS.
             Group {
                 if model.hasMedia {
                     editor
@@ -30,27 +32,30 @@ struct ContentView: View {
                 SilenceSettingsPanel(model: model)
                     .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
             }
-        }
-        .navigationTitle("HT Edit")
-        .toolbar { toolbar }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: [.audiovisualContent],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls): model.add(urls: urls)
-            case .failure(let error): model.errorMessage = error.localizedDescription
+            .toolbar { toolbar }
+            .fileImporter(
+                isPresented: $isImporterPresented,
+                allowedContentTypes: [.audiovisualContent],
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case .success(let urls): model.add(urls: urls)
+                case .failure(let error): model.errorMessage = error.localizedDescription
+                }
+            }
+            .alert("Something went wrong", isPresented: errorBinding) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.errorMessage ?? "")
             }
         }
+        .navigationTitle("HT Edit")
         .dropDestination(for: URL.self) { urls, _ in
             model.add(urls: urls.filter(Self.isMediaFile))
         }
-        .alert("Something went wrong", isPresented: errorBinding) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
+        #if DEBUG
+        .task { await UITestSupport.importFixtureIfRequested(into: model) }
+        #endif
     }
 
     // MARK: Sections
@@ -74,6 +79,7 @@ struct ContentView: View {
         if model.isPortrait {
             HSplitView {
                 PlayerView(player: model.player)
+                    .accessibilityIdentifier("playerView")
                     .frame(minWidth: 200, idealWidth: 340)
                 timelinePane
                     .frame(minWidth: 420)
@@ -81,6 +87,7 @@ struct ContentView: View {
         } else {
             VSplitView {
                 PlayerView(player: model.player)
+                    .accessibilityIdentifier("playerView")
                     .frame(minHeight: 220)
                 timelinePane
                     .frame(minHeight: 230)
@@ -115,11 +122,12 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            Button("Import", systemImage: "plus") {
+            Button("Add Videos", systemImage: "plus") {
                 isImporterPresented = true
             }
             .keyboardShortcut("o")
             .help("Add videos to the timeline (⌘O)")
+            .accessibilityIdentifier("addButton")
 
             Button(model.isPlaying ? "Pause" : "Play", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
                 model.togglePlayback()
