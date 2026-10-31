@@ -87,7 +87,9 @@ struct WaveformTimelineView: View {
                 }
                 .onEnded { _ in zoomAtGestureStart = nil }
         )
-        .frame(minHeight: 140, idealHeight: 180)
+        // The scroll content's width is derived from the visible width; pin the
+        // preferred size so it can never feed back into the surrounding layout.
+        .frame(minWidth: 0, idealWidth: 400, maxWidth: .infinity, minHeight: 140, idealHeight: 180, maxHeight: .infinity)
         .accessibilityElement()
         .accessibilityLabel("Timeline")
         .accessibilityIdentifier("timeline")

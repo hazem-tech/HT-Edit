@@ -78,23 +78,28 @@ struct ContentView: View {
     }
 
     /// Vertical video sits beside the timeline; landscape video sits above it.
+    ///
+    /// Plain SwiftUI stacks (not `HSplitView`/`VSplitView`): the split views host
+    /// their panes in AppKit constraint-based hosting views, which fed a layout
+    /// loop with the timeline once media loaded.
     @ViewBuilder
     private var editor: some View {
         if model.isPortrait {
-            HSplitView {
+            HStack(spacing: 0) {
                 PlayerView(player: model.player)
-                    .accessibilityIdentifier("playerView")
-                    .frame(minWidth: 200, idealWidth: 340)
+                    .frame(minWidth: 220, idealWidth: 340, maxWidth: 420, maxHeight: .infinity)
+                Divider()
                 timelinePane
-                    .frame(minWidth: 420)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            VSplitView {
+            VStack(spacing: 0) {
                 PlayerView(player: model.player)
-                    .accessibilityIdentifier("playerView")
-                    .frame(minHeight: 220)
+                    .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
+                Divider()
                 timelinePane
-                    .frame(minHeight: 230)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 280)
             }
         }
     }

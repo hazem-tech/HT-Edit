@@ -43,7 +43,6 @@ struct WaveformCanvas: View {
             drawClipBoundaries(in: &context, height: size.height, visibleStart: visibleStart, visibleEnd: visibleEnd)
             drawRuler(in: &context, visibleStart: visibleStart, visibleEnd: visibleEnd)
         }
-        .drawingGroup()
     }
 
     private func xPosition(for seconds: Double, visibleStart: Double) -> CGFloat {
