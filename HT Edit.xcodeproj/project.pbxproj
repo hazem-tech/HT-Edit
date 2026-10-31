@@ -1,0 +1,549 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 110;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		A115571130958EF6001A7F76 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A11556FB30958EF3001A7F76 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A115570230958EF3001A7F76;
+			remoteInfo = "HT Edit";
+		};
+		A115571B30958EF6001A7F76 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A11556FB30958EF3001A7F76 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A115570230958EF3001A7F76;
+			remoteInfo = "HT Edit";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A115570330958EF3001A7F76 /* HT Edit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "HT Edit.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A115571030958EF6001A7F76 /* HT EditTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HT EditTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A115571A30958EF6001A7F76 /* HT EditUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HT EditUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A115570530958EF3001A7F76 /* HT Edit */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "HT Edit";
+			sourceTree = "<group>";
+		};
+		A115571330958EF6001A7F76 /* HT EditTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "HT EditTests";
+			sourceTree = "<group>";
+		};
+		A115571D30958EF6001A7F76 /* HT EditUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "HT EditUITests";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A115570030958EF3001A7F76 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		A115570D30958EF6001A7F76 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		A115571730958EF6001A7F76 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A11556FA30958EF3001A7F76 = {
+			isa = PBXGroup;
+			children = (
+				A115570530958EF3001A7F76 /* HT Edit */,
+				A115571330958EF6001A7F76 /* HT EditTests */,
+				A115571D30958EF6001A7F76 /* HT EditUITests */,
+				A115570430958EF3001A7F76 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A115570430958EF3001A7F76 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A115570330958EF3001A7F76 /* HT Edit.app */,
+				A115571030958EF6001A7F76 /* HT EditTests.xctest */,
+				A115571A30958EF6001A7F76 /* HT EditUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A115570230958EF3001A7F76 /* HT Edit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A115572230958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT Edit" */;
+			buildPhases = (
+				A11556FF30958EF3001A7F76 /* Sources */,
+				A115570030958EF3001A7F76 /* Frameworks */,
+				A115570130958EF3001A7F76 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				A115570530958EF3001A7F76 /* HT Edit */,
+			);
+			name = "HT Edit";
+			productName = "HT Edit";
+			productReference = A115570330958EF3001A7F76 /* HT Edit.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A115570F30958EF6001A7F76 /* HT EditTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A115572530958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT EditTests" */;
+			buildPhases = (
+				A115570C30958EF6001A7F76 /* Sources */,
+				A115570D30958EF6001A7F76 /* Frameworks */,
+				A115570E30958EF6001A7F76 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A115571230958EF6001A7F76 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A115571330958EF6001A7F76 /* HT EditTests */,
+			);
+			name = "HT EditTests";
+			productName = "HT EditTests";
+			productReference = A115571030958EF6001A7F76 /* HT EditTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A115571930958EF6001A7F76 /* HT EditUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A115572830958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT EditUITests" */;
+			buildPhases = (
+				A115571630958EF6001A7F76 /* Sources */,
+				A115571730958EF6001A7F76 /* Frameworks */,
+				A115571830958EF6001A7F76 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A115571C30958EF6001A7F76 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A115571D30958EF6001A7F76 /* HT EditUITests */,
+			);
+			name = "HT EditUITests";
+			productName = "HT EditUITests";
+			productReference = A115571A30958EF6001A7F76 /* HT EditUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A11556FB30958EF3001A7F76 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A115570230958EF3001A7F76 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					A115570F30958EF6001A7F76 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A115570230958EF3001A7F76;
+					};
+					A115571930958EF6001A7F76 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A115570230958EF3001A7F76;
+					};
+				};
+			};
+			buildConfigurationList = A11556FE30958EF3001A7F76 /* Build configuration list for PBXProject "HT Edit" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A11556FA30958EF3001A7F76;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A115570430958EF3001A7F76 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A115570230958EF3001A7F76 /* HT Edit */,
+				A115570F30958EF6001A7F76 /* HT EditTests */,
+				A115571930958EF6001A7F76 /* HT EditUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A115570130958EF3001A7F76 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		A115570E30958EF6001A7F76 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		A115571830958EF6001A7F76 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A11556FF30958EF3001A7F76 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A115570C30958EF6001A7F76 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		A115571630958EF6001A7F76 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A115571230958EF6001A7F76 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A115570230958EF3001A7F76 /* HT Edit */;
+			targetProxy = A115571130958EF6001A7F76 /* PBXContainerItemProxy */;
+		};
+		A115571C30958EF6001A7F76 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A115570230958EF3001A7F76 /* HT Edit */;
+			targetProxy = A115571B30958EF6001A7F76 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A115572030958EF6001A7F76 /* Debug configuration for PBXProject "HT Edit" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A115572130958EF6001A7F76 /* Release configuration for PBXProject "HT Edit" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A115572330958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT Edit" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-Edit";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A115572430958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT Edit" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-Edit";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A115572630958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT EditTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-EditTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HT Edit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HT Edit";
+			};
+			name = Debug;
+		};
+		A115572730958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT EditTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-EditTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HT Edit.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HT Edit";
+			};
+			name = Release;
+		};
+		A115572930958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT EditUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-EditUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = "HT Edit";
+			};
+			name = Debug;
+		};
+		A115572A30958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT EditUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = CL4CTC5AZQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "ht.edit.HT-EditUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = "HT Edit";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A11556FE30958EF3001A7F76 /* Build configuration list for PBXProject "HT Edit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A115572030958EF6001A7F76 /* Debug configuration for PBXProject "HT Edit" */,
+				A115572130958EF6001A7F76 /* Release configuration for PBXProject "HT Edit" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A115572230958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT Edit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A115572330958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT Edit" */,
+				A115572430958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT Edit" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A115572530958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT EditTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A115572630958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT EditTests" */,
+				A115572730958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT EditTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		A115572830958EF6001A7F76 /* Build configuration list for PBXNativeTarget "HT EditUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A115572930958EF6001A7F76 /* Debug configuration for PBXNativeTarget "HT EditUITests" */,
+				A115572A30958EF6001A7F76 /* Release configuration for PBXNativeTarget "HT EditUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A11556FB30958EF3001A7F76 /* Project object */;
+	validationLevel = 1;
+}
