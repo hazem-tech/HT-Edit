@@ -11,6 +11,12 @@ import SwiftUI
 /// The scroll view only hosts an empty, correctly sized content view for
 /// scrolling and hit-testing. The waveform is drawn behind it for just the
 /// visible viewport, and the playhead is a separate lightweight overlay.
+///
+/// Layout: everything sits inside a `GeometryReader`, which always takes exactly
+/// the space it is offered and never asks its content. The scroll content width
+/// is derived from that width, so it can never feed back into the layout. (A bare
+/// horizontal `ScrollView` reports its content width when a stack measures it
+/// with an unbounded proposal, which caused a re-layout loop.)
 struct WaveformTimelineView: View {
     let model: EditorViewModel
 
@@ -19,6 +25,8 @@ struct WaveformTimelineView: View {
     /// Horizontal scroll offset of the visible slice, in points.
     @State private var scrollOffset: CGFloat = 0
     @State private var scrollPosition = ScrollPosition(edge: .leading)
+    /// Last measured visible width, used by `setZoom` outside of layout.
+    @State private var visibleWidth: CGFloat = 0
 
     static let zoomRange: ClosedRange<Double> = 1...400
 
@@ -27,41 +35,44 @@ struct WaveformTimelineView: View {
         return seconds.isFinite && seconds > 0 ? seconds : 1
     }
 
-    /// Width available to the timeline: the single source of truth for both the
-    /// scroll content width and the visible width. Whole points only, so the
-    /// content never exceeds the container by a fraction and re-triggers layout.
-    @State private var availableWidth: CGFloat = 0
+    private func contentWidth(visible width: CGFloat) -> CGFloat {
+        (max(width, 1) * zoom).rounded(.down)
+    }
 
-    private var contentWidth: CGFloat { (max(availableWidth, 1) * zoom).rounded(.down) }
-    private var pixelsPerSecond: CGFloat { contentWidth / durationSeconds }
+    private func pixelsPerSecond(visible width: CGFloat) -> CGFloat {
+        contentWidth(visible: width) / durationSeconds
+    }
 
     var body: some View {
         #if DEBUG
         let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
         #endif
         VStack(alignment: .leading, spacing: 8) {
-            timeline
-                .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded(.down) } action: { width in
-                    if abs(width - availableWidth) >= 1 { availableWidth = width }
-                }
+            GeometryReader { proxy in
+                timeline(visibleWidth: proxy.size.width.rounded(.down))
+            }
+            .frame(minHeight: 140, idealHeight: 180, maxHeight: .infinity)
+            .accessibilityElement()
+            .accessibilityLabel("Timeline")
+            .accessibilityIdentifier("timeline")
             zoomControl
         }
     }
 
-    private var timeline: some View {
-        ScrollView(.horizontal) {
+    private func timeline(visibleWidth width: CGFloat) -> some View {
+        let scale = pixelsPerSecond(visible: width)
+        return ScrollView(.horizontal) {
             Color.clear
-                .frame(width: contentWidth)
+                .frame(width: contentWidth(visible: width))
                 .contentShape(.rect)
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            model.seek(toSeconds: Double(value.location.x / pixelsPerSecond))
+                            model.seek(toSeconds: Double(value.location.x / scale))
                         }
                 )
         }
         .scrollPosition($scrollPosition)
-        // Only the offset comes from the scroll view; widths come from `availableWidth`.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x.rounded() } action: { _, newValue in
             scrollOffset = newValue
         }
@@ -71,15 +82,15 @@ struct WaveformTimelineView: View {
                 silences: model.silences,
                 thresholdDB: model.settings.thresholdDB,
                 offset: scrollOffset,
-                pixelsPerSecond: pixelsPerSecond
+                pixelsPerSecond: scale
             )
         }
         .overlay(alignment: .leading) {
             PlayheadOverlay(
                 model: model,
                 offset: scrollOffset,
-                viewportWidth: availableWidth,
-                pixelsPerSecond: pixelsPerSecond,
+                viewportWidth: width,
+                pixelsPerSecond: scale,
                 scrollPosition: $scrollPosition
             )
             .allowsHitTesting(false)
@@ -93,12 +104,11 @@ struct WaveformTimelineView: View {
                 }
                 .onEnded { _ in zoomAtGestureStart = nil }
         )
-        // The scroll content's width is derived from the visible width; pin the
-        // preferred size so it can never feed back into the surrounding layout.
-        .frame(minWidth: 0, idealWidth: 400, maxWidth: .infinity, minHeight: 140, idealHeight: 180, maxHeight: .infinity)
-        .accessibilityElement()
-        .accessibilityLabel("Timeline")
-        .accessibilityIdentifier("timeline")
+        // Remember the width for zooming. This only affects later zoom math,
+        // never this view's size, so it can't cause a layout loop.
+        .onChange(of: width, initial: true) { _, newWidth in
+            visibleWidth = newWidth
+        }
     }
 
     private var zoomControl: some View {
@@ -128,9 +138,9 @@ struct WaveformTimelineView: View {
         let clamped = min(Self.zoomRange.upperBound, max(Self.zoomRange.lowerBound, newZoom))
         guard clamped != zoom else { return }
         let playhead = model.currentTime.seconds.isFinite ? model.currentTime.seconds : 0
-        let screenX = CGFloat(playhead) * pixelsPerSecond - scrollOffset
+        let screenX = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - scrollOffset
         zoom = clamped
-        let newOffset = CGFloat(playhead) * pixelsPerSecond - screenX
+        let newOffset = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - screenX
         scrollPosition.scrollTo(x: max(0, newOffset))
     }
 }

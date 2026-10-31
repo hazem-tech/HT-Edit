@@ -21,7 +21,6 @@ struct ClipListView: View {
                 ForEach(model.clips) { clip in
                     ClipRow(clip: clip)
                         .tag(clip.id)
-                        .accessibilityIdentifier("clipRow")
                 }
                 .onMove { offsets, destination in
                     model.moveClips(fromOffsets: offsets, toOffset: destination)
@@ -77,6 +76,7 @@ private struct ClipRow: View {
                 Text(clip.name)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .accessibilityIdentifier("clipRow")
                 Text(clip.isPlaced ? TimeFormatting.string(clip.duration) : "…")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
