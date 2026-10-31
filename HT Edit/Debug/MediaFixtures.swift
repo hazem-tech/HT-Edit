@@ -138,10 +138,9 @@ nonisolated enum MediaFixtures {
             AVVideoWidthKey: Int(size.width),
             AVVideoHeightKey: Int(size.height),
         ])
-        input.expectsMediaDataInRealTime = false
         input.transform = kind.transform
         guard writer.canAdd(input) else { throw FixtureError.setup("video input") }
-        writer.add(input)
+        let receiver = writer.inputReceiver(for: input)
         try writer.start()
         writer.startSession(atSourceTime: .zero)
 
@@ -151,20 +150,23 @@ nonisolated enum MediaFixtures {
         let format = try CMVideoFormatDescription(imageBuffer: pixelBuffer)
 
         for frame in 0..<frameCount {
-            while !input.isReadyForMoreMediaData {
-                try await Task.sleep(for: .milliseconds(2))
-            }
             let timing = CMSampleTimingInfo(
                 duration: CMTime(value: 1, timescale: fps),
                 presentationTimeStamp: CMTime(value: CMTimeValue(frame), timescale: fps),
                 decodeTimeStamp: .invalid
             )
             let sample = try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing)
-            guard input.append(sample) else {
-                throw FixtureError.writer(writer.error?.localizedDescription ?? "append failed")
+            // `appendImmediately` + a short sleep instead of the async `append`,
+            // which has reports of never resuming.
+            var ready = CMReadySampleBuffer(unsafeBuffer: sample)
+            while true {
+                let appended = try receiver.appendImmediately(ready)
+                if appended { break }
+                try await Task.sleep(for: .milliseconds(2))
+                ready = CMReadySampleBuffer(unsafeBuffer: try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing))
             }
         }
-        input.markAsFinished()
+        receiver.finish()
         writer.endSession(atSourceTime: CMTime(value: CMTimeValue(frameCount), timescale: fps))
         await writer.finishWriting()
         guard writer.status == .completed else {

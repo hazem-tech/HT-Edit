@@ -5,6 +5,7 @@
 
 import CoreMedia
 import Foundation
+import Testing
 @testable import HT_Edit
 
 /// Builds `AudioLevels` from per-window dB values: 1 kHz, 10 frames per window (10 ms).
@@ -51,9 +52,30 @@ func matches(_ ranges: [CMTimeRange], _ expected: [(Double, Double)], tolerance:
     return zip(actual, expected).allSatisfy { isClose($0.0, $1.0, tolerance: tolerance) && isClose($0.1, $1.1, tolerance: tolerance) }
 }
 
-/// A clip pre-filled with levels, for timeline and view-model tests.
+/// A clip with pre-computed levels, for timeline and view-model tests.
 @MainActor
-func makeClip(_ decibels: [Float], name: String = "clip") -> Clip {
+func makeClip(_ decibels: [Float], name: String = "clip") -> (clip: Clip, levels: AudioLevels) {
     let levels = makeLevels(decibels)
-    return Clip(url: URL(filePath: "/tmp/\(name).mov"), name: name, duration: levels.duration, levels: levels)
+    return (Clip(url: URL(filePath: "/tmp/\(name).mov"), name: name, duration: levels.duration), levels)
+}
+
+extension MediaFixtures.Kind: CustomTestStringConvertible {
+    var testDescription: String { rawValue }
+}
+
+/// A fresh temporary directory, removed by the caller.
+func makeTemporaryDirectory(_ label: String = "tests") -> URL {
+    FileManager.default.temporaryDirectory.appending(path: "\(label)-\(UUID().uuidString)", directoryHint: .isDirectory)
+}
+
+/// Polls `condition` on the main actor until it's true or `timeout` passes.
+@MainActor
+func waitUntil(timeout: Duration = .seconds(15), _ condition: () -> Bool) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while !condition() {
+        if clock.now >= deadline { return false }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    return true
 }

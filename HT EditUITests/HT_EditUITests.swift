@@ -13,6 +13,8 @@ final class HT_EditUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    // MARK: Launch & import button
+
     /// The splash screen warms up the media pipeline, then the editor appears.
     @MainActor
     func testLaunchShowsImportButtonAfterSplash() throws {
@@ -25,14 +27,103 @@ final class HT_EditUITests: XCTestCase {
     }
 
     @MainActor
-    func testImportButtonOpensFilePicker() throws {
+    func testEmptyStateImportButtonOpensFilePicker() throws {
         let app = XCUIApplication()
         app.launch()
 
         let importButton = app.buttons["importButton"]
         XCTAssertTrue(importButton.waitForExistence(timeout: 10))
         importButton.click()
-        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5) || app.dialogs.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForOpenPanel(in: app), "Open panel didn't appear from the empty-state button")
+    }
+
+    @MainActor
+    func testToolbarAddButtonOpensFilePicker() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let addButton = app.buttons["addButton"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 10))
+        addButton.click()
+        XCTAssertTrue(waitForOpenPanel(in: app), "Open panel didn't appear from the toolbar + button")
+    }
+
+    // MARK: Imported media
+
+    /// Imports a generated video (green frames, tone/silence/tone) via the debug hook.
+    @MainActor
+    private func launchWithFixture(_ kinds: String...) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestFixture"] + kinds
+        app.launch()
+        return app
+    }
+
+    @MainActor
+    func testImportedVideoShowsFramesAndFinishesAnalyzing() throws {
+        let app = launchWithFixture("h264Landscape")
+
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "Clip row didn't appear")
+
+        // "Analyzing audio…" must go away.
+        let analyzing = app.staticTexts["Analyzing audio…"]
+        let finished = NSPredicate(format: "exists == false")
+        let expectation = XCTNSPredicateExpectation(predicate: finished, object: analyzing)
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 20), .completed, "Still analyzing after 20 s")
+
+        // The player area shows the green video, not black.
+        let player = app.descendants(matching: .any).matching(identifier: "playerView").firstMatch
+        XCTAssertTrue(player.waitForExistence(timeout: 10))
+        let start = Date()
+        var green = 0.0
+        repeat {
+            green = greenFraction(of: player.screenshot().image)
+            if green > 0.3 { break }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date().timeIntervalSince(start) < 10
+        add(XCTAttachment(screenshot: app.screenshot()))
+        XCTAssertGreaterThan(green, 0.3, "Player area isn't showing the video (green fraction \(green))")
+    }
+
+    @MainActor
+    func testToolbarAddButtonOpensFilePickerWithMediaLoaded() throws {
+        let app = launchWithFixture("h264Landscape")
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+
+        let addButton = app.buttons["addButton"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.click()
+        XCTAssertTrue(waitForOpenPanel(in: app), "Open panel didn't appear from + with media loaded")
+    }
+
+    @MainActor
+    func testRightClickDeleteRemovesClip() throws {
+        let app = launchWithFixture("h264Landscape", "hevcMP4")
+        let rows = app.descendants(matching: .any).matching(identifier: "clipRow")
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 30), "Both clips should appear")
+        XCTAssertEqual(rows.count, 2)
+
+        rows.element(boundBy: 0).rightClick()
+        let delete = app.menuItems["Delete Clip"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "Context menu has no Delete item")
+        delete.click()
+
+        let oneLeft = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 1"), object: rows)
+        XCTAssertEqual(XCTWaiter().wait(for: [oneLeft], timeout: 5), .completed, "Clip wasn't deleted")
+    }
+
+    @MainActor
+    func testDeleteKeyRemovesSelectedClip() throws {
+        let app = launchWithFixture("h264Landscape")
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+
+        row.click()
+        app.typeKey(.delete, modifierFlags: [])
+
+        XCTAssertTrue(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state")
     }
 
     @MainActor
@@ -40,5 +131,36 @@ final class HT_EditUITests: XCTestCase {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
         }
+    }
+
+    // MARK: Helpers
+
+    @MainActor
+    private func waitForOpenPanel(in app: XCUIApplication) -> Bool {
+        let candidates = [app.sheets.firstMatch, app.dialogs.firstMatch, app.windows["Open"]]
+        let start = Date()
+        while Date().timeIntervalSince(start) < 8 {
+            if candidates.contains(where: \.exists) { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return false
+    }
+
+    /// Fraction of sampled pixels that are clearly green (the fixture's frame color).
+    private func greenFraction(of image: NSImage) -> Double {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0 }
+        let width = 48, height = 48
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 0 }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var greenCount = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Int(pixels[index]), green = Int(pixels[index + 1]), blue = Int(pixels[index + 2])
+            if green > 120 && green > red + 60 && green > blue + 60 { greenCount += 1 }
+        }
+        return Double(greenCount) / Double(width * height)
     }
 }

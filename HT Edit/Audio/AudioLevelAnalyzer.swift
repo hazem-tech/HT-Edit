@@ -5,6 +5,7 @@
 
 import Accelerate
 import AVFoundation
+import os
 
 nonisolated enum AnalysisError: LocalizedError, Equatable {
     case noAudioTrack
@@ -102,7 +103,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
 
         let cacheKey = cache.flatMap { _ in LevelsCache.key(for: url, windowDuration: windowDuration) }
         if let cache, let cacheKey, let cached = await cache.load(key: cacheKey) {
-            Log.analysis.info("\(name, privacy: .public): served from cache")
+            Log.analysis.notice("\(name, privacy: .public): served from cache")
             emit(AudioLevelsChunk(
                 sampleRate: cached.sampleRate,
                 framesPerWindow: cached.framesPerWindow,
@@ -117,7 +118,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
 
         let layout = try await Self.layout(of: url, windowDuration: windowDuration)
         guard layout.totalWindows > 0 else {
-            Log.analysis.info("\(name, privacy: .public): empty audio track")
+            Log.analysis.notice("\(name, privacy: .public): empty audio track")
             return
         }
 
@@ -126,7 +127,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             count: segmentCount ?? limiter.limit,
             minimumWindowsPerSegment: minimumWindowsPerSegment
         )
-        Log.analysis.info("\(name, privacy: .public): \(layout.totalWindows) windows at \(layout.sampleRate) Hz in \(segments.count) segment(s)")
+        Log.analysis.notice("\(name, privacy: .public): \(layout.totalWindows) windows at \(layout.sampleRate) Hz in \(segments.count) segment(s)")
 
         var levels: AudioLevels
         do {
@@ -138,7 +139,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
         }
 
         try Task.checkCancellation()
-        Log.analysis.info("\(name, privacy: .public): analyzed in \((clock.now - started).description, privacy: .public)")
+        Log.analysis.notice("\(name, privacy: .public): analyzed in \((clock.now - started).description, privacy: .public)")
         if let cache, let cacheKey {
             levels.isComplete = true
             await cache.store(levels, key: cacheKey)
@@ -229,13 +230,17 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
 
         let reader = try AVAssetReader(asset: asset)
         let startFrame = windows.lowerBound * layout.framesPerWindow
-        let start = layout.trackStart + CMTime(value: CMTimeValue(startFrame), timescale: layout.sampleRate)
-        if isLast {
-            reader.timeRange = CMTimeRange(start: start, duration: .positiveInfinity)
-        } else {
-            let frames = windows.count * layout.framesPerWindow
-            reader.timeRange = CMTimeRange(start: start, duration: CMTime(value: CMTimeValue(frames), timescale: layout.sampleRate))
+        let endFrame = isLast ? layout.totalFrames : windows.upperBound * layout.framesPerWindow
+        let expectedFrames = max(0, endFrame - startFrame)
+        let isWholeTrack = windows.lowerBound == 0 && isLast
+        if !isWholeTrack {
+            // Always a finite range: an open-ended range never signals the end of data.
+            reader.timeRange = CMTimeRange(
+                start: layout.trackStart + CMTime(value: CMTimeValue(startFrame), timescale: layout.sampleRate),
+                duration: CMTime(value: CMTimeValue(expectedFrames), timescale: layout.sampleRate)
+            )
         }
+        Log.analysis.notice("Segment \(windows.lowerBound)..<\(windows.upperBound): reading \(expectedFrames) frames")
 
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -271,8 +276,10 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             )
         }
 
+        // Stop as soon as the segment has all its frames instead of asking the
+        // provider for more: never depend on it signalling the end of data.
         var decodedFrames = 0
-        while rms.count < windows.count, let sampleBuffer = try await provider.next() {
+        while decodedFrames < expectedFrames, let sampleBuffer = try await provider.next() {
             try Task.checkCancellation()
             progress.touch()
             decodedFrames += sampleBuffer.sampleCount
@@ -294,6 +301,7 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             throw AnalysisError.readerFailed(reader.error?.localizedDescription ?? "Unknown error")
         }
         try Task.checkCancellation()
+        Log.analysis.notice("Segment \(windows.lowerBound)..<\(windows.upperBound): decoded \(decodedFrames) frames")
         guard decodedFrames > 0 else { throw AnalysisError.emptySegment }
 
         let emittedCount = rms.count

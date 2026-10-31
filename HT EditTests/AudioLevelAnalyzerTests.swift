@@ -9,6 +9,7 @@ import Testing
 @testable import HT_Edit
 
 /// End-to-end: real file → AVAssetReader → vDSP windows → silence detection.
+@Suite(.timeLimit(.minutes(1)))
 struct AudioLevelAnalyzerTests {
 
     /// Writes a stereo 48 kHz file: 1 s tone, 1 s digital silence, 1 s tone.
@@ -149,5 +150,108 @@ struct AudioLevelAnalyzerTests {
         await #expect(throws: (any Error).self) {
             _ = try await AudioLevelAnalyzer(cache: nil).analyzeAll(url: url)
         }
+    }
+
+    // MARK: Compressed audio in real containers
+
+    @Test(arguments: [MediaFixtures.Kind.h264Landscape, .hevcMP4, .audioOnly])
+    func analyzesAACInContainers(kind: MediaFixtures.Kind) async throws {
+        let directory = makeTemporaryDirectory("analyzer-aac")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try await MediaFixtures.make(kind, in: directory)
+
+        let single = try await AudioLevelAnalyzer(segmentCount: 1, cache: nil).analyzeAll(url: url)
+        let parallel = try await AudioLevelAnalyzer(segmentCount: 4, minimumWindowsPerSegment: 1, cache: nil).analyzeAll(url: url)
+
+        for levels in [single, parallel] {
+            #expect(levels.sampleRate == 48_000)
+            #expect(isClose(levels.duration.seconds, 3, tolerance: 0.05))
+            #expect(!levels.rmsDB.contains(AudioLevels.unanalyzed))
+            let silences = SilenceDetector.detect(levels: levels, settings: settings())
+            #expect(matches(silences, [(1, 2)], tolerance: 0.06), "silences: \(seconds(silences))")
+        }
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+struct StallWatchdogTests {
+
+    @Test func returnsTheResultWhenTheOperationFinishes() async throws {
+        let progress = ProgressMarker()
+        let value = try await StallWatchdog.run(timeout: .seconds(2), progress: progress) {
+            try await Task.sleep(for: .milliseconds(50))
+            return 42
+        }
+        #expect(value == 42)
+    }
+
+    @Test func failsFastWhenTheOperationStopsMakingProgress() async throws {
+        let progress = ProgressMarker()
+        let clock = ContinuousClock()
+        let start = clock.now
+        await #expect(throws: AnalysisError.stalled) {
+            _ = try await StallWatchdog.run(timeout: .milliseconds(300), progress: progress, checkInterval: .milliseconds(50)) { () async throws -> Int in
+                // Simulates a read that never returns and ignores cancellation.
+                await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+                return 0
+            }
+        }
+        #expect(clock.now - start < .seconds(3))
+    }
+
+    @Test func progressKeepsALongOperationAlive() async throws {
+        let progress = ProgressMarker()
+        let value = try await StallWatchdog.run(timeout: .milliseconds(300), progress: progress, checkInterval: .milliseconds(50)) {
+            for _ in 0..<10 {
+                try await Task.sleep(for: .milliseconds(100))
+                progress.touch()
+            }
+            return "done"
+        }
+        #expect(value == "done")
+    }
+
+    @Test func propagatesErrors() async {
+        await #expect(throws: AnalysisError.emptySegment) {
+            _ = try await StallWatchdog.run(timeout: .seconds(2), progress: ProgressMarker()) { () async throws -> Int in
+                throw AnalysisError.emptySegment
+            }
+        }
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+struct ReaderLimiterTests {
+
+    @Test func neverRunsMoreThanTheLimit() async {
+        let limiter = ReaderLimiter(limit: 2)
+        let peak = PeakCounter()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    await limiter.acquire()
+                    await peak.enter()
+                    try? await Task.sleep(for: .milliseconds(30))
+                    await peak.leave()
+                    await limiter.release()
+                }
+            }
+        }
+        #expect(await peak.maximum == 2)
+        #expect(await limiter.activeCount == 0)
+    }
+}
+
+private actor PeakCounter {
+    private var current = 0
+    private(set) var maximum = 0
+
+    func enter() {
+        current += 1
+        maximum = max(maximum, current)
+    }
+
+    func leave() {
+        current -= 1
     }
 }

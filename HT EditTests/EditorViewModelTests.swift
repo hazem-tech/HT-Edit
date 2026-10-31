@@ -13,7 +13,7 @@ struct EditorViewModelTests {
 
     private func makeModel() -> EditorViewModel {
         EditorViewModel(
-            clips: [
+            analyzedClips: [
                 makeClip(loud(1) + quiet(1) + loud(1), name: "a"),   // 3 s, gap 1–2
                 makeClip(loud(0.5) + quiet(0.5) + loud(1), name: "b"), // 2 s, gap 0.5–1 → 3.5–4
             ],
@@ -52,8 +52,29 @@ struct EditorViewModelTests {
         #expect(matches(model.silences, [(0.5, 1), (3, 4)]))
     }
 
+    @Test func removingClipsUpdatesTheTimeline() {
+        let model = makeModel()
+        let first = model.clips[0].id
+        model.removeClips([first])
+        #expect(model.clips.map(\.name) == ["b"])
+        #expect(isClose(model.timelineDuration.seconds, 2))
+        #expect(matches(model.silences, [(0.5, 1)]))
+
+        model.removeClips(Set(model.clips.map(\.id)))
+        #expect(!model.hasMedia)
+        #expect(model.silences.isEmpty)
+        #expect(model.playbackStatus == .idle)
+    }
+
+    @Test func removingNothingIsHarmless() {
+        let model = makeModel()
+        model.removeClips([])
+        model.removeClips([UUID()])
+        #expect(model.clips.count == 2)
+    }
+
     @Test func defaultsMatchTheSpec() {
-        let model = EditorViewModel(clips: [])
+        let model = EditorViewModel(analyzedClips: [])
         #expect(model.settings.thresholdDB == -70)
         #expect(model.settings.paddingStart == 0)
         #expect(model.settings.paddingEnd == 0)
@@ -62,23 +83,23 @@ struct EditorViewModelTests {
 
     @Test func orientationFollowsTheFirstVideo() {
         var portrait = makeClip(loud(1), name: "p")
-        portrait.presentationSize = CGSize(width: 1080, height: 1920)
+        portrait.clip.presentationSize = CGSize(width: 1080, height: 1920)
         var landscape = makeClip(loud(1), name: "l")
-        landscape.presentationSize = CGSize(width: 1920, height: 1080)
+        landscape.clip.presentationSize = CGSize(width: 1920, height: 1080)
 
-        #expect(EditorViewModel(clips: [portrait, landscape]).isPortrait)
-        #expect(!EditorViewModel(clips: [landscape, portrait]).isPortrait)
-        #expect(!EditorViewModel(clips: []).isPortrait)
+        #expect(EditorViewModel(analyzedClips: [portrait, landscape]).isPortrait)
+        #expect(!EditorViewModel(analyzedClips: [landscape, portrait]).isPortrait)
+        #expect(!EditorViewModel(analyzedClips: []).isPortrait)
     }
 
     @Test func squareIsNotPortrait() {
         var square = makeClip(loud(1))
-        square.presentationSize = CGSize(width: 1080, height: 1080)
-        #expect(!EditorViewModel(clips: [square]).isPortrait)
+        square.clip.presentationSize = CGSize(width: 1080, height: 1080)
+        #expect(!EditorViewModel(analyzedClips: [square]).isPortrait)
     }
 
     @Test func transportWithoutMediaIsSafe() {
-        let model = EditorViewModel(clips: [])
+        let model = EditorViewModel(analyzedClips: [])
         model.togglePlayback()
         model.seek(toSeconds: 1)
         #expect(model.isPlaying == false)

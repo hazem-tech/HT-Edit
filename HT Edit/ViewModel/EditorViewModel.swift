@@ -4,6 +4,7 @@
 //
 
 import AVFoundation
+import os
 import Observation
 
 /// Where the player is in getting the current timeline ready.
@@ -135,7 +136,7 @@ final class EditorViewModel {
             }
             let clip = Clip(url: url)
             clips.append(clip)
-            Log.importing.info("Import \(url.lastPathComponent, privacy: .public)")
+            Log.importing.notice("Import \(url.lastPathComponent, privacy: .public)")
             load(clipID: clip.id, url: url)
         }
     }
@@ -194,7 +195,7 @@ final class EditorViewModel {
                     $0.duration = duration
                     $0.presentationSize = size
                 }
-                Log.importing.info("\(name, privacy: .public): \(duration.seconds) s, \(Int(size.width))×\(Int(size.height))")
+                Log.importing.notice("\(name, privacy: .public): \(duration.seconds) s, \(Int(size.width))×\(Int(size.height))")
 
                 // 2. Playback first: build the composition before decoding audio.
                 rebuildPlayerItem()
@@ -212,7 +213,7 @@ final class EditorViewModel {
             } catch is CancellationError {
                 return
             } catch AnalysisError.noAudioTrack {
-                Log.analysis.info("\(name, privacy: .public): no audio track")
+                Log.analysis.notice("\(name, privacy: .public): no audio track")
             } catch {
                 Log.importing.error("\(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 errorMessage = "\(name): \(error.localizedDescription)"
@@ -293,7 +294,7 @@ final class EditorViewModel {
                 switch status {
                 case .readyToPlay:
                     playbackStatus = .ready
-                    Log.playback.info("Player ready (\(sources.count) clip(s))")
+                    Log.playback.notice("Player ready (\(sources.count) clip(s))")
                 case .failed:
                     let reason = item.error?.localizedDescription ?? "Unknown error"
                     playbackStatus = .failed(reason)

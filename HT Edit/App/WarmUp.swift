@@ -4,6 +4,7 @@
 //
 
 import AVFoundation
+import os
 
 /// Runs the import pipeline once on a tiny generated clip while the splash
 /// screen is up, so frameworks, the AAC decoder, `AVAssetReader`, the player
@@ -12,12 +13,19 @@ enum WarmUp {
     /// Upper bound on how long launch may wait for warm-up.
     static let timeLimit: Duration = .seconds(2)
 
+    /// Returns after warm-up or `timeLimit`, whichever comes first. Uses the
+    /// stall watchdog (not a task group, which would wait for a stuck child),
+    /// so launch can never be blocked.
     static func run() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await perform() }
-            group.addTask { try? await Task.sleep(for: timeLimit) }
-            await group.next()
-            group.cancelAll()
+        let clock = ContinuousClock()
+        let started = clock.now
+        do {
+            try await StallWatchdog.run(timeout: timeLimit, progress: ProgressMarker()) {
+                await perform()
+            }
+            Log.importing.notice("Warm-up finished in \((clock.now - started).description, privacy: .public)")
+        } catch {
+            Log.importing.error("Warm-up skipped after \((clock.now - started).description, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 
