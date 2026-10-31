@@ -6,13 +6,14 @@
 import CoreMedia
 import SwiftUI
 
-/// Draws the ruler, waveform, silence highlights and threshold line for the
-/// visible slice of the timeline only, so cost is independent of media length.
+/// Draws the ruler, waveform, silence highlights, clip boundaries and threshold
+/// line for the visible slice of the timeline only, so cost is independent of
+/// media length and clip count.
 ///
 /// Inputs are plain values; SwiftUI only re-renders when they change, never
 /// on playhead movement (the playhead lives in its own overlay).
 struct WaveformCanvas: View {
-    let levels: AudioLevels
+    let lanes: [ClipLane]
     let silences: [CMTimeRange]
     let thresholdDB: Double
     /// Horizontal scroll offset of the visible slice, in points.
@@ -35,9 +36,12 @@ struct WaveformCanvas: View {
 
             context.fill(Path(roundedRect: wave, cornerRadius: 6), with: .color(.secondary.opacity(0.08)))
             drawSilences(in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
-            drawWaveform(in: &context, wave: wave, visibleStart: visibleStart)
+            for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
+                drawWaveform(of: lane, in: &context, wave: wave, visibleStart: visibleStart)
+            }
             drawThreshold(in: &context, wave: wave)
-            drawRuler(in: &context, width: size.width, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            drawClipBoundaries(in: &context, height: size.height, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            drawRuler(in: &context, visibleStart: visibleStart, visibleEnd: visibleEnd)
         }
         .drawingGroup()
     }
@@ -64,12 +68,24 @@ struct WaveformCanvas: View {
         context.fill(edges, with: .color(.red.opacity(0.8)))
     }
 
-    private func drawWaveform(in context: inout GraphicsContext, wave: CGRect, visibleStart: Double) {
+    /// Samples one clip's own levels (each clip keeps its own sample rate) for
+    /// the columns it covers on screen.
+    private func drawWaveform(of lane: ClipLane, in context: inout GraphicsContext, wave: CGRect, visibleStart: Double) {
+        let levels = lane.levels
         guard levels.windowCount > 0 else { return }
-        let columns = Int(wave.width / Self.barStep) + 1
+        let laneMinX = max(0, xPosition(for: lane.start, visibleStart: visibleStart))
+        let laneMaxX = min(wave.width, xPosition(for: lane.start + lane.duration, visibleStart: visibleStart))
+        guard laneMaxX > laneMinX else { return }
+
+        let firstColumn = Int((laneMinX / Self.barStep).rounded(.down))
+        let lastColumn = Int((laneMaxX / Self.barStep).rounded(.up))
+        let columns = lastColumn - firstColumn
+        guard columns > 0 else { return }
+
         let windowSeconds = levels.windowSeconds
         let windowsPerColumn = Double(Self.barStep / pixelsPerSecond) / windowSeconds
-        let startWindow = visibleStart / windowSeconds
+        let columnStartTime = visibleStart + Double(CGFloat(firstColumn) * Self.barStep / pixelsPerSecond)
+        let startWindow = (columnStartTime - lane.start) / windowSeconds
 
         let peaks = WaveformSampler.buckets(levels.peakDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
         let rms = WaveformSampler.buckets(levels.rmsDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
@@ -79,7 +95,8 @@ struct WaveformCanvas: View {
         var peakPath = Path()
         var rmsPath = Path()
         for column in 0..<columns {
-            let x = CGFloat(column) * Self.barStep
+            let x = CGFloat(firstColumn + column) * Self.barStep
+            guard x >= laneMinX - Self.barStep, x < laneMaxX else { continue }
             let peakHeight = CGFloat(WaveformSampler.normalized(peaks[column], floorDB: Self.floorDB)) * halfHeight
             let rmsHeight = CGFloat(WaveformSampler.normalized(rms[column], floorDB: Self.floorDB)) * halfHeight
             if peakHeight > 0 {
@@ -105,7 +122,17 @@ struct WaveformCanvas: View {
         context.stroke(path, with: .color(.orange.opacity(0.9)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
     }
 
-    private func drawRuler(in context: inout GraphicsContext, width: CGFloat, visibleStart: Double, visibleEnd: Double) {
+    /// A yellow line where each clip after the first begins.
+    private func drawClipBoundaries(in context: inout GraphicsContext, height: CGFloat, visibleStart: Double, visibleEnd: Double) {
+        var path = Path()
+        for lane in lanes.dropFirst() where lane.start >= visibleStart && lane.start <= visibleEnd {
+            let x = xPosition(for: lane.start, visibleStart: visibleStart)
+            path.addRect(CGRect(x: x - 1, y: 0, width: 2, height: height))
+        }
+        context.fill(path, with: .color(.yellow))
+    }
+
+    private func drawRuler(in context: inout GraphicsContext, visibleStart: Double, visibleEnd: Double) {
         let minimumSpacing: CGFloat = 80
         let step = Self.tickSteps.first { CGFloat($0) * pixelsPerSecond >= minimumSpacing } ?? Self.tickSteps.last!
         let fractionDigits = step < 1 ? (step < 0.25 ? 1 : 2) : 0

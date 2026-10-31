@@ -4,17 +4,20 @@
 //
 
 import CoreMedia
+import Foundation
 @testable import HT_Edit
 
 /// Builds `AudioLevels` from per-window dB values: 1 kHz, 10 frames per window (10 ms).
 func makeLevels(_ decibels: [Float], complete: Bool = true, frameCount: Int? = nil) -> AudioLevels {
     var levels = AudioLevels.empty
-    levels.append(AudioLevelsChunk(
+    levels.apply(AudioLevelsChunk(
         sampleRate: 1_000,
         framesPerWindow: 10,
+        totalWindows: decibels.count,
+        totalFrames: frameCount ?? decibels.count * 10,
+        windowOffset: 0,
         rmsDB: decibels,
-        peakDB: decibels,
-        frameCount: frameCount ?? decibels.count * 10
+        peakDB: decibels
     ))
     levels.isComplete = complete
     return levels
@@ -46,4 +49,11 @@ func matches(_ ranges: [CMTimeRange], _ expected: [(Double, Double)], tolerance:
     let actual = seconds(ranges)
     guard actual.count == expected.count else { return false }
     return zip(actual, expected).allSatisfy { isClose($0.0, $1.0, tolerance: tolerance) && isClose($0.1, $1.1, tolerance: tolerance) }
+}
+
+/// A clip pre-filled with levels, for timeline and view-model tests.
+@MainActor
+func makeClip(_ decibels: [Float], name: String = "clip") -> Clip {
+    let levels = makeLevels(decibels)
+    return Clip(url: URL(filePath: "/tmp/\(name).mov"), name: name, duration: levels.duration, levels: levels)
 }

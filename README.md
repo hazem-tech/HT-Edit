@@ -1,37 +1,38 @@
 # HT Edit
 
-A native macOS video editor built for Apple silicon. The first feature is **silence detection**: import a video, and every silent stretch is highlighted on the audio waveform right away. You can tune the highlights live.
+A native macOS video editor built for Apple silicon. The first feature is **silence detection**: import one or more videos, and every silent stretch is highlighted on the audio waveform right away. You can tune the highlights live, and playback skips the silences.
 
 ## Features
 
-- Import with **⌘O**, the toolbar button, or drag and drop.
-- Video preview, plus a zoomable, scrollable waveform timeline. Pinch or use the zoom slider; click or drag on the timeline to seek.
-- Silences are highlighted in red and update instantly as you move the sliders:
-  - **Threshold (dB):** audio quieter than this counts as silence. The orange dashed line on the waveform shows it.
-  - **Padding start:** audio kept after speech ends.
-  - **Padding end:** audio kept before speech resumes.
-  - **Minimum silence:** shorter pauses are ignored.
-- **Skip silences** plays the video with the highlighted parts skipped, so you can hear the result.
-- Stats: number of silences, total silence, and the length without silences.
+- **Import:** ⌘O, the **+** toolbar button, or drag and drop. You can import several files at once; new clips are added to the end.
+- **One seamless timeline:** a yellow line marks where each clip starts.
+- **Clip sidebar:** shows each clip's thumbnail, name and length. Drag clips to reorder them. Show or hide it with the system sidebar button.
+- **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
+- **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
+- **Playback:** always skips the highlighted silences.
+
+## Speed
+
+- **Parallel decoding:** each file's audio is split into segments that are decoded concurrently, one reader per core.
+- **Progressive waveform:** each segment shows its first windows right away, so the waveform fills in from several places at once.
+- **Instant playback:** the timeline and playback are ready as soon as the clip's duration has loaded. The video is drawn with a bare `AVPlayerLayer`.
+- **Cache:** finished analyses are stored in the app's Caches folder, so re-importing a file is instant.
+- **Warm-up at launch:** a splash screen runs the full import path once on a tiny generated clip. This loads the decoder, the reader, the player and the Metal-backed canvas, so the first real import doesn't pay that cost.
 
 ## Architecture
 
-| Layer | File(s) | Notes |
-|---|---|---|
-| Decode + measure | `Audio/AudioLevelAnalyzer.swift` | Async `AVAssetReaderOutput.Provider`, native sample rate, vDSP downmix/RMS/peak/dB, streamed as `AsyncThrowingStream` chunks, cancellable |
-| Detection | `Analysis/SilenceDetector.swift` | Pure, single linear pass over cached levels; sample-accurate `CMTimeRange`s |
-| Playback skipping | `Analysis/PlaybackSkipper.swift`, `ViewModel/EditorViewModel.swift` | O(log n) lookup; boundary time observers at each silence start |
-| Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` | Draws only the visible viewport (cost independent of media length), Metal-backed `Canvas` |
-| UI | `ContentView.swift`, `Views/*` | SwiftUI + Observation, inspector, `VideoPlayer` |
+| Layer | File(s) |
+|---|---|
+| Decode + measure | `Audio/AudioLevelAnalyzer.swift`, `Audio/AudioSegmentPlanner.swift`, `Audio/LevelsCache.swift` |
+| Detection | `Analysis/SilenceDetector.swift`, `Model/ClipTimeline.swift` |
+| Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
+| Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
+| UI | `ContentView.swift`, `Views/*`, `App/WarmUp.swift` |
 
-The audio is decoded once per import. After that, a slider change only re-runs `SilenceDetector` over the cached per-window levels (10 ms windows), which takes about a millisecond even for an hour of audio.
-
-Project settings: Swift 6 language mode, MainActor-by-default isolation, macOS 27 deployment target. Heavy work runs in `@concurrent` functions off the main actor.
+Project settings: Swift 6, MainActor-by-default, macOS 27.
 
 ## Building and testing
 
 Open `HT Edit.xcodeproj` in Xcode, then:
 - **⌘R** to run the app.
 - **⌘U** to run the unit tests (Swift Testing) and UI tests (XCTest).
-
-The unit tests cover the detector, padding and threshold rules, dB math, windowing, waveform bucketing, playback skipping, time formatting, and the view model. They also include an end-to-end test that writes a tone/silence/tone audio file and analyzes it through AVFoundation.

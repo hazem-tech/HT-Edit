@@ -13,13 +13,14 @@ final class HT_EditUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// The splash screen warms up the media pipeline, then the editor appears.
     @MainActor
-    func testLaunchShowsImportButton() throws {
+    func testLaunchShowsImportButtonAfterSplash() throws {
         let app = XCUIApplication()
         app.launch()
 
         let importButton = app.buttons["importButton"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
         XCTAssertTrue(importButton.isEnabled)
     }
 
@@ -28,7 +29,9 @@ final class HT_EditUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        app.buttons["importButton"].click()
+        let importButton = app.buttons["importButton"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
+        importButton.click()
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5) || app.dialogs.firstMatch.waitForExistence(timeout: 5))
     }
 

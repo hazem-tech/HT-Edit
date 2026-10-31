@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-/// Inspector with the live silence-detection controls and resulting stats.
+/// Inspector with the live silence-detection controls.
 struct SilenceSettingsPanel: View {
     @Bindable var model: EditorViewModel
 
@@ -20,15 +20,6 @@ struct SilenceSettingsPanel: View {
                     help: "Audio quieter than this level is treated as silence."
                 ) { "\(Int($0.rounded())) dB" }
                 .accessibilityIdentifier("thresholdSlider")
-
-                SettingSlider(
-                    "Minimum silence",
-                    value: $model.settings.minimumSilenceDuration,
-                    in: SilenceSettings.minimumSilenceDurationRange,
-                    step: 0.05,
-                    help: "Shorter pauses are left alone."
-                ) { Self.milliseconds($0) }
-                .accessibilityIdentifier("minimumSilenceSlider")
             }
 
             Section("Padding") {
@@ -49,25 +40,6 @@ struct SilenceSettingsPanel: View {
                     help: "Audio kept before speech resumes, at the end of each silence."
                 ) { Self.milliseconds($0) }
                 .accessibilityIdentifier("paddingEndSlider")
-            }
-
-            Section("Playback") {
-                Toggle("Skip silences while playing", isOn: $model.skipSilences)
-                    .accessibilityIdentifier("skipSilencesToggle")
-            }
-
-            Section("Result") {
-                LabeledContent("Silences found", value: model.silences.count, format: .number)
-                LabeledContent("Total silence", value: TimeFormatting.string(model.totalSilenceDuration))
-                LabeledContent("Original length", value: TimeFormatting.string(model.timelineDuration))
-                LabeledContent("Without silences", value: TimeFormatting.string(model.durationWithoutSilences))
-            }
-
-            Section {
-                Button("Reset to Defaults", systemImage: "arrow.counterclockwise") {
-                    model.resetSettings()
-                }
-                .disabled(model.settings == .default)
             }
         }
         .formStyle(.grouped)

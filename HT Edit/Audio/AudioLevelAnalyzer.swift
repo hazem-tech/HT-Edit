@@ -23,14 +23,23 @@ nonisolated enum AnalysisError: LocalizedError, Equatable {
 /// Decodes the first audio track of a media file and measures its loudness
 /// in fixed windows, streaming results as they become available.
 ///
-/// - Decoding uses the async `AVAssetReaderOutput.Provider` API.
+/// - The track is split into window-aligned segments decoded **in parallel**,
+///   one `AVAssetReader` per core, using the async `AVAssetReaderOutput.Provider` API.
+/// - Every segment emits its first windows immediately, so the waveform appears
+///   at several places at once and fills in.
 /// - All DSP (downmix, RMS, peak, dB conversion) runs through Accelerate/vDSP.
-/// - Audio is read at its native sample rate; nothing is resampled.
+/// - Results are cached on disk; re-importing a file is instant.
 nonisolated struct AudioLevelAnalyzer: Sendable {
     /// Length of one analysis window, in seconds.
     var windowDuration: Double = 0.010
-    /// Minimum wall-clock time between emitted chunks. `.zero` emits after every decoded buffer.
-    var chunkInterval: Duration = .milliseconds(100)
+    /// Minimum wall-clock time between chunks from one segment. `.zero` emits after every decoded buffer.
+    var chunkInterval: Duration = .milliseconds(50)
+    /// Number of parallel readers; `nil` picks one per core (short files use one).
+    var segmentCount: Int?
+    /// Shortest segment worth its own reader, in windows.
+    var minimumWindowsPerSegment = AudioSegmentPlanner.minimumWindowsPerSegment
+    /// On-disk cache of finished analyses; `nil` disables caching.
+    var cache: LevelsCache? = .shared
 
     /// Streams level chunks for the file at `url`. Cancelling the consuming task
     /// (or dropping the stream) stops decoding.
@@ -49,24 +58,125 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
         }
     }
 
-    /// Convenience: analyzes the whole file and returns the accumulated levels.
+    /// Convenience: analyzes the whole file and returns the finished levels.
     func analyzeAll(url: URL) async throws -> AudioLevels {
         var levels = AudioLevels.empty
         for try await chunk in self.levels(for: url) {
-            levels.append(chunk)
+            levels.apply(chunk)
         }
         levels.isComplete = true
         return levels
     }
 
+    // MARK: Pipeline
+
+    private struct TrackLayout: Sendable {
+        var sampleRate: Int32
+        var framesPerWindow: Int
+        var totalFrames: Int
+        var totalWindows: Int
+        var trackStart: CMTime
+    }
+
     @concurrent
-    private func analyze(url: URL, emit: @Sendable (AudioLevelsChunk) -> Void) async throws {
+    private func analyze(url: URL, emit: @escaping @Sendable (AudioLevelsChunk) -> Void) async throws {
+        let cacheKey = cache.flatMap { _ in LevelsCache.key(for: url, windowDuration: windowDuration) }
+        if let cache, let cacheKey, let cached = await cache.load(key: cacheKey) {
+            emit(AudioLevelsChunk(
+                sampleRate: cached.sampleRate,
+                framesPerWindow: cached.framesPerWindow,
+                totalWindows: cached.windowCount,
+                totalFrames: cached.frameCount,
+                windowOffset: 0,
+                rmsDB: cached.rmsDB,
+                peakDB: cached.peakDB
+            ))
+            return
+        }
+
+        let layout = try await Self.layout(of: url, windowDuration: windowDuration)
+        guard layout.totalWindows > 0 else { return }
+
+        let segments = AudioSegmentPlanner.segments(
+            totalWindows: layout.totalWindows,
+            count: segmentCount ?? AudioSegmentPlanner.defaultSegmentCount,
+            minimumWindowsPerSegment: minimumWindowsPerSegment
+        )
+        let chunkInterval = chunkInterval
+
+        var levels = AudioLevels.empty
+        try await withThrowingTaskGroup(of: AudioLevelsChunk.self) { group in
+            for segment in segments {
+                group.addTask {
+                    try await Self.decode(
+                        url: url,
+                        windows: segment,
+                        isLast: segment.upperBound == layout.totalWindows,
+                        layout: layout,
+                        chunkInterval: chunkInterval,
+                        emit: emit
+                    )
+                }
+            }
+            for try await segmentResult in group {
+                levels.apply(segmentResult)
+            }
+        }
+
+        try Task.checkCancellation()
+        if let cache, let cacheKey {
+            levels.isComplete = true
+            await cache.store(levels, key: cacheKey)
+        }
+    }
+
+    private static func layout(of url: URL, windowDuration: Double) async throws -> TrackLayout {
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw AnalysisError.noAudioTrack
+        }
+        let (timeRange, formats) = try await track.load(.timeRange, .formatDescriptions)
+        guard let rate = formats.first?.audioStreamBasicDescription?.mSampleRate, rate > 0 else {
+            throw AnalysisError.unsupportedFormat
+        }
+        let timescale = Int32(rate.rounded())
+        let totalFrames = Int(timeRange.duration.convertScale(timescale, method: .roundHalfAwayFromZero).value)
+        let framesPerWindow = WindowAccumulator.framesPerWindow(sampleRate: rate, windowDuration: windowDuration)
+        return TrackLayout(
+            sampleRate: timescale,
+            framesPerWindow: framesPerWindow,
+            totalFrames: max(0, totalFrames),
+            totalWindows: max(0, (totalFrames + framesPerWindow - 1) / framesPerWindow),
+            trackStart: timeRange.start
+        )
+    }
+
+    /// Decodes one segment, emitting progress chunks, and returns the whole segment
+    /// padded/trimmed to exactly `windows.count` windows so timings stay exact.
+    @concurrent
+    private static func decode(
+        url: URL,
+        windows: Range<Int>,
+        isLast: Bool,
+        layout: TrackLayout,
+        chunkInterval: Duration,
+        emit: @Sendable (AudioLevelsChunk) -> Void
+    ) async throws -> AudioLevelsChunk {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw AnalysisError.noAudioTrack
         }
 
         let reader = try AVAssetReader(asset: asset)
+        let startFrame = windows.lowerBound * layout.framesPerWindow
+        let start = layout.trackStart + CMTime(value: CMTimeValue(startFrame), timescale: layout.sampleRate)
+        if isLast {
+            reader.timeRange = CMTimeRange(start: start, duration: .positiveInfinity)
+        } else {
+            let frames = windows.count * layout.framesPerWindow
+            reader.timeRange = CMTimeRange(start: start, duration: CMTime(value: CMTimeValue(frames), timescale: layout.sampleRate))
+        }
+
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVLinearPCMBitDepthKey: 32,
@@ -81,18 +191,39 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             if reader.status == .reading { reader.cancelReading() }
         }
 
-        var accumulator = WindowAccumulator(windowDuration: windowDuration)
-        let clock = ContinuousClock()
-        var lastEmit = clock.now
+        var accumulator = WindowAccumulator(framesPerWindow: layout.framesPerWindow)
+        var rms: [Float] = []
+        var peak: [Float] = []
+        rms.reserveCapacity(windows.count)
+        peak.reserveCapacity(windows.count)
 
-        while let sampleBuffer = try await provider.next() {
+        let clock = ContinuousClock()
+        var lastEmit: ContinuousClock.Instant?
+
+        func chunk(rms: ArraySlice<Float>, peak: ArraySlice<Float>, at offset: Int) -> AudioLevelsChunk {
+            AudioLevelsChunk(
+                sampleRate: layout.sampleRate,
+                framesPerWindow: layout.framesPerWindow,
+                totalWindows: layout.totalWindows,
+                totalFrames: layout.totalFrames,
+                windowOffset: offset,
+                rmsDB: Array(rms),
+                peakDB: Array(peak)
+            )
+        }
+
+        while rms.count < windows.count, let sampleBuffer = try await provider.next() {
             try Task.checkCancellation()
             try sampleBuffer.withUnsafeSampleBuffer { buffer in
                 try accumulator.consume(buffer)
             }
             let now = clock.now
-            if now - lastEmit >= chunkInterval, let chunk = accumulator.drain() {
-                emit(chunk)
+            if lastEmit.map({ now - $0 >= chunkInterval }) ?? true, let batch = accumulator.drain() {
+                let offset = rms.count
+                let room = windows.count - offset
+                rms.append(contentsOf: batch.rmsDB.prefix(room))
+                peak.append(contentsOf: batch.peakDB.prefix(room))
+                emit(chunk(rms: rms[offset...], peak: peak[offset...], at: windows.lowerBound + offset))
                 lastEmit = now
             }
         }
@@ -101,47 +232,56 @@ nonisolated struct AudioLevelAnalyzer: Sendable {
             throw AnalysisError.readerFailed(reader.error?.localizedDescription ?? "Unknown error")
         }
         try Task.checkCancellation()
-        if let chunk = accumulator.finish() {
-            emit(chunk)
+
+        let emittedCount = rms.count
+        if let batch = accumulator.finish() {
+            let room = windows.count - rms.count
+            rms.append(contentsOf: batch.rmsDB.prefix(room))
+            peak.append(contentsOf: batch.peakDB.prefix(room))
         }
+        // Decoders can deliver a few frames less than requested; repeat the last
+        // value so the segment keeps its exact length.
+        if rms.count < windows.count {
+            let missing = windows.count - rms.count
+            rms.append(contentsOf: repeatElement(rms.last ?? AudioLevels.floorDB, count: missing))
+            peak.append(contentsOf: repeatElement(peak.last ?? AudioLevels.floorDB, count: missing))
+        }
+        if rms.count > emittedCount {
+            emit(chunk(rms: rms[emittedCount...], peak: peak[emittedCount...], at: windows.lowerBound + emittedCount))
+        }
+        return chunk(rms: rms[...], peak: peak[...], at: windows.lowerBound)
     }
+}
+
+/// A run of completed windows, in dBFS.
+nonisolated struct WindowBatch: Sendable, Equatable {
+    var rmsDB: [Float]
+    var peakDB: [Float]
+    var frameCount: Int
 }
 
 /// Turns arbitrary-sized PCM buffers into fixed-size loudness windows.
 nonisolated struct WindowAccumulator {
-    let windowDuration: Double
+    let framesPerWindow: Int
 
-    private(set) var sampleRate: Int32 = 0
-    private(set) var framesPerWindow = 0
     /// Mono samples not yet forming a full window.
     private var pending: [Float] = []
-    /// Linear RMS / peak of completed windows not yet emitted.
+    /// Linear RMS / peak of completed windows not yet drained.
     private var rms: [Float] = []
     private var peak: [Float] = []
-    private var framesInChunk = 0
+    private var framesInBatch = 0
 
-    init(windowDuration: Double) {
-        self.windowDuration = windowDuration
+    init(framesPerWindow: Int) {
+        self.framesPerWindow = max(1, framesPerWindow)
+        pending.reserveCapacity(self.framesPerWindow * 2)
     }
 
-    /// Configures the window size for `sampleRate`. Called automatically by `consume(_:)`.
-    mutating func configure(sampleRate: Double) {
-        guard framesPerWindow == 0 else { return }
-        self.sampleRate = Int32(sampleRate.rounded())
-        framesPerWindow = max(1, Int((sampleRate * windowDuration).rounded()))
-        pending.reserveCapacity(framesPerWindow * 2)
+    static func framesPerWindow(sampleRate: Double, windowDuration: Double) -> Int {
+        max(1, Int((sampleRate * windowDuration).rounded()))
     }
 
     /// Downmixes a non-interleaved Float32 PCM sample buffer to mono and appends it.
     mutating func consume(_ buffer: CMSampleBuffer) throws {
-        if framesPerWindow == 0 {
-            guard let rate = buffer.formatDescription?.audioStreamBasicDescription?.mSampleRate,
-                  rate > 0 else {
-                throw AnalysisError.unsupportedFormat
-            }
-            configure(sampleRate: rate)
-        }
-
         try buffer.withAudioBufferList { list, _ in
             guard let first = list.first else { return }
             guard first.mNumberChannels == 1 else { throw AnalysisError.unsupportedFormat }
@@ -176,30 +316,28 @@ nonisolated struct WindowAccumulator {
     }
 
     /// Returns the windows completed since the last drain, or `nil` if there are none.
-    mutating func drain() -> AudioLevelsChunk? {
+    mutating func drain() -> WindowBatch? {
         guard !rms.isEmpty else { return nil }
-        let chunk = AudioLevelsChunk(
-            sampleRate: sampleRate,
-            framesPerWindow: framesPerWindow,
+        let batch = WindowBatch(
             rmsDB: Self.decibels(rms),
             peakDB: Self.decibels(peak),
-            frameCount: framesInChunk
+            frameCount: framesInBatch
         )
         rms.removeAll(keepingCapacity: true)
         peak.removeAll(keepingCapacity: true)
-        framesInChunk = 0
-        return chunk
+        framesInBatch = 0
+        return batch
     }
 
     /// Flushes the trailing partial window and returns everything not yet drained.
-    mutating func finish() -> AudioLevelsChunk? {
+    mutating func finish() -> WindowBatch? {
         if !pending.isEmpty {
             let (windowRMS, windowPeak) = pending.withUnsafeBufferPointer { samples in
                 (vDSP.rootMeanSquare(samples), vDSP.maximumMagnitude(samples))
             }
             rms.append(windowRMS)
             peak.append(windowPeak)
-            framesInChunk += pending.count
+            framesInBatch += pending.count
             pending.removeAll()
         }
         return drain()
@@ -231,6 +369,6 @@ nonisolated struct WindowAccumulator {
         rms.append(contentsOf: windowRMS)
         peak.append(contentsOf: windowPeak)
         pending.removeFirst(windowCount * size)
-        framesInChunk += windowCount * size
+        framesInBatch += windowCount * size
     }
 }

@@ -32,15 +32,12 @@ struct DecibelTests {
 struct WindowAccumulatorTests {
 
     @Test func windowSizeFollowsSampleRate() {
-        var accumulator = WindowAccumulator(windowDuration: 0.01)
-        accumulator.configure(sampleRate: 48_000)
-        #expect(accumulator.framesPerWindow == 480)
-        #expect(accumulator.sampleRate == 48_000)
+        #expect(WindowAccumulator.framesPerWindow(sampleRate: 48_000, windowDuration: 0.01) == 480)
+        #expect(WindowAccumulator.framesPerWindow(sampleRate: 44_100, windowDuration: 0.01) == 441)
     }
 
     @Test func downmixesAndWindowsSamples() {
-        var accumulator = WindowAccumulator(windowDuration: 0.01)
-        accumulator.configure(sampleRate: 1_000) // 10 frames per window
+        var accumulator = WindowAccumulator(framesPerWindow: 10)
 
         let left = [Float](repeating: 1, count: 25)
         let right = [Float](repeating: 0, count: 25)
@@ -50,12 +47,12 @@ struct WindowAccumulatorTests {
             }
         }
 
-        let chunk = accumulator.drain()
-        #expect(chunk?.rmsDB.count == 2)
-        #expect(chunk?.frameCount == 20)
+        let batch = accumulator.drain()
+        #expect(batch?.rmsDB.count == 2)
+        #expect(batch?.frameCount == 20)
         // Mono is 0.5 → -6.02 dB.
-        #expect(chunk.map { abs($0.rmsDB[0] - (-6.0206)) < 0.001 } == true)
-        #expect(chunk.map { abs($0.peakDB[1] - (-6.0206)) < 0.001 } == true)
+        #expect(batch.map { abs($0.rmsDB[0] - (-6.0206)) < 0.001 } == true)
+        #expect(batch.map { abs($0.peakDB[1] - (-6.0206)) < 0.001 } == true)
 
         #expect(accumulator.drain() == nil)
 
@@ -67,15 +64,91 @@ struct WindowAccumulatorTests {
     }
 
     @Test func rmsAndPeakDiffer() {
-        var accumulator = WindowAccumulator(windowDuration: 0.01)
-        accumulator.configure(sampleRate: 1_000)
+        var accumulator = WindowAccumulator(framesPerWindow: 10)
         var samples = [Float](repeating: 0, count: 10)
         samples[0] = 1
         samples.withUnsafeBufferPointer { accumulator.appendMono(channels: [$0], frames: 10) }
 
-        let chunk = accumulator.drain()
-        #expect(chunk.map { abs($0.peakDB[0]) < 0.001 } == true)       // peak 1.0 → 0 dB
-        #expect(chunk.map { abs($0.rmsDB[0] - (-10)) < 0.001 } == true) // rms √0.1 → -10 dB
+        let batch = accumulator.drain()
+        #expect(batch.map { abs($0.peakDB[0]) < 0.001 } == true)       // peak 1.0 → 0 dB
+        #expect(batch.map { abs($0.rmsDB[0] - (-10)) < 0.001 } == true) // rms √0.1 → -10 dB
+    }
+}
+
+struct AudioLevelsTests {
+
+    private func chunk(offset: Int, values: [Float], total: Int = 10) -> AudioLevelsChunk {
+        AudioLevelsChunk(
+            sampleRate: 1_000, framesPerWindow: 10, totalWindows: total, totalFrames: total * 10,
+            windowOffset: offset, rmsDB: values, peakDB: values
+        )
+    }
+
+    @Test func firstChunkAllocatesTheWholeTrack() {
+        var levels = AudioLevels.empty
+        levels.apply(chunk(offset: 4, values: [-20, -30]))
+        #expect(levels.windowCount == 10)
+        #expect(levels.frameCount == 100)
+        #expect(levels.rmsDB[4] == -20)
+        #expect(levels.rmsDB[5] == -30)
+        #expect(levels.rmsDB[0] == AudioLevels.unanalyzed)
+        #expect(levels.rmsDB[9] == AudioLevels.unanalyzed)
+    }
+
+    @Test func chunksCanArriveOutOfOrder() {
+        var levels = AudioLevels.empty
+        levels.apply(chunk(offset: 5, values: [-5, -6, -7, -8, -9]))
+        levels.apply(chunk(offset: 0, values: [-0, -1, -2, -3, -4]))
+        #expect(levels.rmsDB == [-0, -1, -2, -3, -4, -5, -6, -7, -8, -9])
+    }
+
+    @Test func overflowingChunkIsClipped() {
+        var levels = AudioLevels.empty
+        levels.apply(chunk(offset: 8, values: [-1, -2, -3, -4]))
+        #expect(levels.windowCount == 10)
+        #expect(levels.rmsDB[8] == -1)
+        #expect(levels.rmsDB[9] == -2)
+    }
+
+    @Test func unanalyzedWindowsAreNeverSilent() {
+        var levels = AudioLevels.empty
+        levels.apply(chunk(offset: 0, values: [-90, -90, -90], total: 100))
+        let silences = SilenceDetector.detect(levels: levels, settings: settings(minimum: 0.01))
+        #expect(matches(silences, [(0, 0.03)]))
+    }
+
+    @Test func unanalyzedWindowsDrawAsEmpty() {
+        #expect(WaveformSampler.normalized(AudioLevels.unanalyzed, floorDB: -80) == 0)
+    }
+}
+
+struct AudioSegmentPlannerTests {
+
+    @Test func shortTracksUseOneSegment() {
+        #expect(AudioSegmentPlanner.segments(totalWindows: 1_500, count: 8) == [0..<1_500])
+    }
+
+    @Test func emptyTrackHasNoSegments() {
+        #expect(AudioSegmentPlanner.segments(totalWindows: 0, count: 8).isEmpty)
+    }
+
+    @Test(arguments: [1, 3, 8, 12])
+    func segmentsAreContiguousAndCoverEverything(count: Int) {
+        let total = 360_001
+        let segments = AudioSegmentPlanner.segments(totalWindows: total, count: count)
+        #expect(segments.count == count)
+        #expect(segments.first?.lowerBound == 0)
+        #expect(segments.last?.upperBound == total)
+        for (a, b) in zip(segments, segments.dropFirst()) {
+            #expect(a.upperBound == b.lowerBound)
+        }
+        let lengths = segments.map(\.count)
+        #expect((lengths.max() ?? 0) - (lengths.min() ?? 0) <= 1)
+    }
+
+    @Test func segmentCountIsLimitedByLength() {
+        // 5 000 windows at a 2 000-window minimum → at most 2 segments.
+        #expect(AudioSegmentPlanner.segments(totalWindows: 5_000, count: 8).count == 2)
     }
 }
 
@@ -172,11 +245,12 @@ struct TimeFormattingTests {
 
 struct SilenceSettingsTests {
 
-    @Test func defaultsAreInsideTheirRanges() {
+    @Test func defaults() {
         let defaults = SilenceSettings.default
+        #expect(defaults.thresholdDB == -70)
+        #expect(defaults.paddingStart == 0)
+        #expect(defaults.paddingEnd == 0)
+        #expect(defaults.minimumSilenceDuration == 0.3)
         #expect(SilenceSettings.thresholdRange.contains(defaults.thresholdDB))
-        #expect(SilenceSettings.paddingRange.contains(defaults.paddingStart))
-        #expect(SilenceSettings.paddingRange.contains(defaults.paddingEnd))
-        #expect(SilenceSettings.minimumSilenceDurationRange.contains(defaults.minimumSilenceDuration))
     }
 }

@@ -61,7 +61,7 @@ struct WaveformTimelineView: View {
         }
         .background {
             WaveformCanvas(
-                levels: model.levels,
+                lanes: model.lanes,
                 silences: model.silences,
                 thresholdDB: model.settings.thresholdDB,
                 offset: viewport.offset,

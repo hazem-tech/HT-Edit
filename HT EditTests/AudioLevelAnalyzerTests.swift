@@ -35,56 +35,89 @@ struct AudioLevelAnalyzerTests {
         return url
     }
 
-    @Test func analyzesWholeFileAndFindsTheGap() async throws {
+    @Test(arguments: [1, 4])
+    func analyzesWholeFileAndFindsTheGap(segments: Int) async throws {
         let url = try Self.makeToneSilenceToneFile()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let levels = try await AudioLevelAnalyzer().analyzeAll(url: url)
+        let analyzer = AudioLevelAnalyzer(segmentCount: segments, minimumWindowsPerSegment: 1, cache: nil)
+        let levels = try await analyzer.analyzeAll(url: url)
 
-        #expect(levels.isComplete)
         #expect(levels.sampleRate == 48_000)
         #expect(levels.framesPerWindow == 480)
         #expect(isClose(levels.duration.seconds, 3, tolerance: 0.001))
         #expect(levels.windowCount == 300)
+        #expect(!levels.rmsDB.contains(AudioLevels.unanalyzed))
 
         // A 0.5 amplitude sine has RMS ≈ 0.354 → ≈ -9 dB.
         #expect(abs(levels.rmsDB[50] - (-9.03)) < 0.1)
         #expect(levels.rmsDB[150] == AudioLevels.floorDB)
 
-        let silences = SilenceDetector.detect(
-            levels: levels,
-            settings: SilenceSettings(thresholdDB: -40, paddingStart: 0, paddingEnd: 0, minimumSilenceDuration: 0.3)
-        )
+        let silences = SilenceDetector.detect(levels: levels, settings: settings())
         #expect(matches(silences, [(1, 2)], tolerance: 0.011))
 
-        let padded = SilenceDetector.detect(
-            levels: levels,
-            settings: SilenceSettings(thresholdDB: -40, paddingStart: 0.1, paddingEnd: 0.2, minimumSilenceDuration: 0.3)
-        )
+        let padded = SilenceDetector.detect(levels: levels, settings: settings(paddingStart: 0.1, paddingEnd: 0.2))
         #expect(matches(padded, [(1.1, 1.8)], tolerance: 0.011))
+    }
+
+    @Test func parallelSegmentsMatchSingleReader() async throws {
+        let url = try Self.makeToneSilenceToneFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let single = try await AudioLevelAnalyzer(segmentCount: 1, cache: nil).analyzeAll(url: url)
+        let parallel = try await AudioLevelAnalyzer(segmentCount: 6, minimumWindowsPerSegment: 1, cache: nil).analyzeAll(url: url)
+
+        #expect(single.windowCount == parallel.windowCount)
+        // Segment edges may differ by decoder priming; levels must still agree closely.
+        let maxDifference = zip(single.rmsDB, parallel.rmsDB).map { abs($0 - $1) }.max() ?? 0
+        #expect(maxDifference < 1)
     }
 
     @Test func streamsProgressively() async throws {
         let url = try Self.makeToneSilenceToneFile()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var analyzer = AudioLevelAnalyzer()
+        var analyzer = AudioLevelAnalyzer(cache: nil)
         analyzer.chunkInterval = .zero
         var chunkCount = 0
-        var totalFrames = 0
+        var levels = AudioLevels.empty
         for try await chunk in analyzer.levels(for: url) {
             chunkCount += 1
-            totalFrames += chunk.frameCount
+            levels.apply(chunk)
         }
         #expect(chunkCount > 1)
-        #expect(totalFrames == 144_000)
+        #expect(levels.frameCount == 144_000)
+        #expect(!levels.rmsDB.contains(AudioLevels.unanalyzed))
+    }
+
+    @Test func secondRunIsServedFromCache() async throws {
+        let url = try Self.makeToneSilenceToneFile()
+        let directory = FileManager.default.temporaryDirectory.appending(path: "levels-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        var analyzer = AudioLevelAnalyzer(cache: LevelsCache(directory: directory))
+        analyzer.chunkInterval = .zero
+        let first = try await analyzer.analyzeAll(url: url)
+
+        var chunks = 0
+        var cached = AudioLevels.empty
+        for try await chunk in analyzer.levels(for: url) {
+            chunks += 1
+            cached.apply(chunk)
+        }
+        #expect(chunks == 1) // the whole track in one go, no decoding
+        #expect(cached.rmsDB == first.rmsDB)
+        #expect(cached.frameCount == first.frameCount)
     }
 
     @Test func stoppingEarlyEndsTheStream() async throws {
         let url = try Self.makeToneSilenceToneFile()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var analyzer = AudioLevelAnalyzer()
+        var analyzer = AudioLevelAnalyzer(cache: nil)
         analyzer.chunkInterval = .zero
         var received = 0
         for try await _ in analyzer.levels(for: url) {
@@ -99,7 +132,7 @@ struct AudioLevelAnalyzerTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let task = Task {
-            try await AudioLevelAnalyzer().analyzeAll(url: url)
+            try await AudioLevelAnalyzer(cache: nil).analyzeAll(url: url)
         }
         task.cancel()
         // Either finishes with a cancellation error or (if it already finished) a result;
@@ -114,7 +147,7 @@ struct AudioLevelAnalyzerTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         await #expect(throws: (any Error).self) {
-            _ = try await AudioLevelAnalyzer().analyzeAll(url: url)
+            _ = try await AudioLevelAnalyzer(cache: nil).analyzeAll(url: url)
         }
     }
 }

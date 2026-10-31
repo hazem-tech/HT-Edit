@@ -5,7 +5,6 @@
 //  Created by Hazem on 10/31/26.
 //
 
-import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -13,31 +12,39 @@ struct ContentView: View {
     @State private var model = EditorViewModel()
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
-        Group {
-            if model.hasMedia {
-                editor
-            } else {
-                emptyState
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            ClipListView(model: model)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
+        } detail: {
+            Group {
+                if model.hasMedia {
+                    editor
+                } else {
+                    emptyState
+                }
+            }
+            .inspector(isPresented: inspectorBinding) {
+                SilenceSettingsPanel(model: model)
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
             }
         }
-        .frame(minWidth: 900, minHeight: 600)
-        .navigationTitle(model.fileName ?? "HT Edit")
+        .navigationTitle("HT Edit")
         .toolbar { toolbar }
-        .fileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.audiovisualContent]) { result in
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.audiovisualContent],
+            allowsMultipleSelection: true
+        ) { result in
             switch result {
-            case .success(let url): model.load(url: url)
+            case .success(let urls): model.add(urls: urls)
             case .failure(let error): model.errorMessage = error.localizedDescription
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: Self.isMediaFile) else { return }
-            model.load(url: url)
-        }
-        .inspector(isPresented: inspectorBinding) {
-            SilenceSettingsPanel(model: model)
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+            model.add(urls: urls.filter(Self.isMediaFile))
         }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
@@ -50,29 +57,43 @@ struct ContentView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("Import a Video", systemImage: "film.stack")
+            Label("Import Videos", systemImage: "film.stack")
         } description: {
-            Text("Drop a video here or choose one to import. Silences are highlighted automatically.")
+            Text("Drop videos here or choose them to import. Silences are highlighted automatically.")
         } actions: {
-            Button("Import Video…") { isImporterPresented = true }
+            Button("Import Videos…") { isImporterPresented = true }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .accessibilityIdentifier("importButton")
         }
     }
 
+    /// Vertical video sits beside the timeline; landscape video sits above it.
+    @ViewBuilder
     private var editor: some View {
-        VSplitView {
-            VideoPlayer(player: model.player)
-                .frame(minHeight: 220)
-
-            VStack(alignment: .leading, spacing: 10) {
-                transportBar
-                WaveformTimelineView(model: model)
+        if model.isPortrait {
+            HSplitView {
+                PlayerView(player: model.player)
+                    .frame(minWidth: 200, idealWidth: 340)
+                timelinePane
+                    .frame(minWidth: 420)
             }
-            .padding()
-            .frame(minHeight: 230)
+        } else {
+            VSplitView {
+                PlayerView(player: model.player)
+                    .frame(minHeight: 220)
+                timelinePane
+                    .frame(minHeight: 230)
+            }
         }
+    }
+
+    private var timelinePane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            transportBar
+            WaveformTimelineView(model: model)
+        }
+        .padding()
     }
 
     private var transportBar: some View {
@@ -88,34 +109,24 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             Spacer()
-
-            Text("\(model.silences.count) silences · \(TimeFormatting.string(model.totalSilenceDuration)) total")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
-            Button("Import", systemImage: "square.and.arrow.down") {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button("Import", systemImage: "plus") {
                 isImporterPresented = true
             }
             .keyboardShortcut("o")
-            .help("Import a video (⌘O)")
-        }
+            .help("Add videos to the timeline (⌘O)")
 
-        ToolbarItemGroup(placement: .primaryAction) {
             Button(model.isPlaying ? "Pause" : "Play", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
                 model.togglePlayback()
             }
             .keyboardShortcut(.space, modifiers: [])
             .disabled(!model.hasMedia)
             .help("Play / Pause (Space)")
-
-            Toggle("Skip Silences", systemImage: "forward.end.alt", isOn: $model.skipSilences)
-                .disabled(!model.hasMedia)
-                .help("Skip highlighted silences during playback")
 
             Button("Inspector", systemImage: "sidebar.trailing") {
                 isInspectorPresented.toggle()

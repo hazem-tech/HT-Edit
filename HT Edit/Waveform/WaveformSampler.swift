@@ -50,8 +50,9 @@ nonisolated enum WaveformSampler {
     }
 
     /// Maps a dBFS value to 0...1 for drawing, where `floorDB` maps to 0 and 0 dBFS to 1.
+    /// Non-finite values (e.g. `AudioLevels.unanalyzed`) map to 0 so they draw as empty.
     static func normalized(_ decibels: Float, floorDB: Float) -> Float {
-        guard floorDB < 0 else { return 0 }
+        guard floorDB < 0, decibels.isFinite else { return 0 }
         return min(1, max(0, (decibels - floorDB) / -floorDB))
     }
 }

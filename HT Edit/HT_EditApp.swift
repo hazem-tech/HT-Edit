@@ -18,8 +18,29 @@ struct HT_EditApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
         .defaultSize(width: 1280, height: 820)
+    }
+}
+
+/// Shows the splash screen until the media pipeline is warm, then the editor.
+private struct RootView: View {
+    @State private var isReady = false
+
+    var body: some View {
+        Group {
+            if isReady {
+                ContentView()
+                    .transition(.opacity)
+            } else {
+                SplashView()
+            }
+        }
+        .frame(minWidth: 900, minHeight: 600)
+        .task {
+            await WarmUp.run()
+            withAnimation(.easeOut(duration: 0.2)) { isReady = true }
+        }
     }
 }
