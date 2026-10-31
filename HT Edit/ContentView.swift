@@ -9,10 +9,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var model = EditorViewModel()
+    @State private var model: EditorViewModel
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+
+    init(model: EditorViewModel = EditorViewModel()) {
+        _model = State(initialValue: model)
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
