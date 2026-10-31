@@ -59,10 +59,6 @@ func makeClip(_ decibels: [Float], name: String = "clip") -> (clip: Clip, levels
     return (Clip(url: URL(filePath: "/tmp/\(name).mov"), name: name, duration: levels.duration), levels)
 }
 
-extension MediaFixtures.Kind: CustomTestStringConvertible {
-    var testDescription: String { rawValue }
-}
-
 /// A fresh temporary directory, removed by the caller.
 func makeTemporaryDirectory(_ label: String = "tests") -> URL {
     FileManager.default.temporaryDirectory.appending(path: "\(label)-\(UUID().uuidString)", directoryHint: .isDirectory)
