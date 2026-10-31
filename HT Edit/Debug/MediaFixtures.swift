@@ -10,6 +10,7 @@
 #if DEBUG
 import AVFoundation
 import CoreVideo
+import os
 
 nonisolated enum MediaFixtures {
 
@@ -253,9 +254,13 @@ enum UITestSupport {
         let directory = FileManager.default.temporaryDirectory.appending(path: "UITestFixtures", directoryHint: .isDirectory)
         var urls: [URL] = []
         for kind in kinds.isEmpty ? [.h264Landscape] : Array(kinds) {
+            let clock = ContinuousClock()
+            let start = clock.now
             do {
                 urls.append(try await MediaFixtures.make(kind, in: directory))
+                Log.importing.notice("UI-test fixture \(kind.rawValue, privacy: .public) generated in \((clock.now - start).description, privacy: .public)")
             } catch {
+                Log.importing.error("UI-test fixture \(kind.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                 model.errorMessage = "UI test fixture: \(error)"
                 return
             }

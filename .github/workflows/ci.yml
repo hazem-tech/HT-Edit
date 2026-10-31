@@ -51,6 +51,8 @@ jobs:
       - name: Unit tests
         run: |
           set -o pipefail
+          .github/scripts/sample-app.sh unit 2 &
+          echo $! > unit-sampler.pid
           xcodebuild test-without-building \
             -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
             -derivedDataPath "$DERIVED_DATA" \
@@ -67,12 +69,8 @@ jobs:
           # take stack samples so a hang shows exactly where the main thread is.
           log stream --style compact --level debug --predicate 'subsystem == "ht.edit"' > app-ui.log 2>&1 &
           echo $! > log-stream.pid
-          mkdir -p samples
-          ( n=0; while true; do
-              sleep 6
-              pid=$(pgrep -x "HT Edit" | head -1)
-              if [ -n "$pid" ]; then n=$((n+1)); sudo /usr/bin/sample "$pid" 1 -mayDie -file "$PWD/samples/sample-$n.txt" >> samples/sampler-errors.txt 2>&1 || true; fi
-            done ) &
+          kill "$(cat unit-sampler.pid 2>/dev/null)" 2>/dev/null || true
+          .github/scripts/sample-app.sh ui 4 &
           echo $! > sampler.pid
           xcodebuild test-without-building \
             -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
@@ -91,7 +89,7 @@ jobs:
           sed -n '/---- UI hierarchy at failure/,/---- end hierarchy ----/p' ui.log | grep -vE "MenuItem|MenuBarItem|^\s*Menu," | head -300 || true
           kill "$(cat log-stream.pid 2>/dev/null)" "$(cat sampler.pid 2>/dev/null)" 2>/dev/null || true
           echo "===== App log (ht.edit) during UI tests ====="
-          head -300 app-ui.log 2>/dev/null || true
+          grep -vE "Segment [0-9]+\.\.<" app-ui.log 2>/dev/null | head -400 || true
           echo "===== Crash reports ====="
           ls -t ~/Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.ips 2>/dev/null | grep -E "HT Edit|HT EditUITests" | head -4 | while IFS= read -r f; do
             echo "--- $f ---"
@@ -116,14 +114,8 @@ jobs:
           PY
           done
           cp ~/Library/Logs/DiagnosticReports/*HT* samples/ 2>/dev/null || true
-          echo "===== Sampler output ====="
-          tail -5 samples/sampler-errors.txt 2>/dev/null || true
-          echo "===== App main-thread samples during UI tests ====="
-          for f in $(ls samples/*.txt 2>/dev/null | sort -V); do
-            echo "--- $f ---"
-            # Main thread call graph, trimmed to the interesting depth.
-            awk '/Call graph:/{cg=1} cg && /com.apple.main-thread/{m=1} m{print; c++} c>45{exit}' "$f" | cut -c1-220
-          done
+          echo "===== Main-thread samples ====="
+          .github/scripts/print-samples.sh
 
       - name: Test summary
         if: always()
