@@ -284,9 +284,9 @@ final class EditorViewModel {
                 let time = player.currentTime()
                 let wasPlaying = isPlaying
                 player.replaceCurrentItem(with: item)
-                if time > .zero {
-                    _ = await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-                }
+                // Always seek: it makes the player decode and display the frame
+                // at the playhead right away instead of a black layer.
+                _ = await player.seek(to: time.isNumeric ? time : .zero, toleranceBefore: .zero, toleranceAfter: .zero)
                 if wasPlaying { player.play() }
 
                 let status = await Self.waitForDecision(on: item, timeout: Self.playerReadyTimeout)

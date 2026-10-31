@@ -37,6 +37,9 @@ struct EditorWindowTests {
         window.makeKeyAndOrderFront(nil)
         defer { window.close() }
 
+        if kind == .portrait { setenv("HTEDIT_TRACE_BODIES", "1", 1) }
+        defer { unsetenv("HTEDIT_TRACE_BODIES") }
+
         let clock = ContinuousClock()
         let start = clock.now
         model.add(urls: [url])
@@ -54,6 +57,14 @@ struct EditorWindowTests {
         #expect(analyzedAt < .seconds(5), "Analysis took \(analyzedAt)")
         #expect(readyAt < .seconds(5), "Playback took \(readyAt)")
         #expect(matches(model.silences, [(1, 2)], tolerance: 0.06))
+        unsetenv("HTEDIT_TRACE_BODIES")
+
+        // The video layer must actually have a frame to show (not a black layer).
+        let playerView = try #require(Self.find(PlayerLayerView.self, in: window.contentView))
+        let displayable = await waitUntil(timeout: .seconds(5)) { playerView.playerLayer.isReadyForDisplay }
+        print("[window] \(kind.rawValue): layer frame=\(playerView.playerLayer.frame), readyForDisplay=\(playerView.playerLayer.isReadyForDisplay)")
+        #expect(displayable, "AVPlayerLayer never became ready for display")
+        #expect(playerView.playerLayer.frame.width > 100 && playerView.playerLayer.frame.height > 100)
 
         // Exercise playback in the window for a moment: it must skip the silence.
         model.seek(toSeconds: 0.8)
@@ -61,5 +72,14 @@ struct EditorWindowTests {
         let skipped = await waitUntil(timeout: .seconds(5)) { model.currentTime.seconds >= 2 }
         model.togglePlayback()
         #expect(skipped, "Playback didn't pass the silence (at \(model.currentTime.seconds) s)")
+    }
+
+    private static func find<T: NSView>(_ type: T.Type, in view: NSView?) -> T? {
+        guard let view else { return nil }
+        if let match = view as? T { return match }
+        for subview in view.subviews {
+            if let match = find(type, in: subview) { return match }
+        }
+        return nil
     }
 }

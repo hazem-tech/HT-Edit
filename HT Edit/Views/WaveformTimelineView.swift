@@ -39,6 +39,9 @@ struct WaveformTimelineView: View {
     private var pixelsPerSecond: CGFloat { contentWidth / durationSeconds }
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
         VStack(alignment: .leading, spacing: 8) {
             timeline
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
@@ -146,6 +149,9 @@ private struct PlayheadOverlay: View {
     @Binding var scrollPosition: ScrollPosition
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
         let seconds = model.currentTime.seconds
         let x = (seconds.isFinite ? CGFloat(seconds) : 0) * pixelsPerSecond - offset
         Rectangle()

@@ -13,6 +13,9 @@ struct ClipListView: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
         List(selection: $selection) {
             Section("Clips") {
                 ForEach(model.clips) { clip in

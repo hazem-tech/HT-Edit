@@ -10,6 +10,9 @@ struct SilenceSettingsPanel: View {
     @Bindable var model: EditorViewModel
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
         Form {
             Section("Detection") {
                 SettingSlider(

@@ -19,6 +19,9 @@ struct ContentView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
         NavigationSplitView(columnVisibility: $columnVisibility) {
             ClipListView(model: model)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
