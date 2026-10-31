@@ -63,6 +63,17 @@ jobs:
         if: success() || failure()
         run: |
           set -o pipefail
+          # The app runs in its own process during UI tests: stream its log and
+          # take stack samples so a hang shows exactly where the main thread is.
+          log stream --style compact --level debug --predicate 'subsystem == "ht.edit"' > app-ui.log 2>&1 &
+          echo $! > log-stream.pid
+          mkdir -p samples
+          ( n=0; while true; do
+              sleep 6
+              pid=$(pgrep -x "HT Edit" | head -1)
+              if [ -n "$pid" ]; then n=$((n+1)); sample "$pid" 1 -mayDie -file "samples/sample-$n.txt" >/dev/null 2>&1 || true; fi
+            done ) &
+          echo $! > sampler.pid
           xcodebuild test-without-building \
             -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
             -derivedDataPath "$DERIVED_DATA" \
@@ -77,7 +88,16 @@ jobs:
           echo "===== App log (ht.edit) during unit tests ====="
           grep -E "\[(import|analysis|playback)\]|Import finished|frame color|Cached re-import" unit.log | head -150 || true
           echo "===== UI hierarchy at UI-test failures ====="
-          sed -n '/---- UI hierarchy at failure/,/---- end hierarchy ----/p' ui.log | head -400 || true
+          sed -n '/---- UI hierarchy at failure/,/---- end hierarchy ----/p' ui.log | grep -vE "MenuItem|MenuBarItem|^\s*Menu," | head -300 || true
+          kill "$(cat log-stream.pid 2>/dev/null)" "$(cat sampler.pid 2>/dev/null)" 2>/dev/null || true
+          echo "===== App log (ht.edit) during UI tests ====="
+          head -300 app-ui.log 2>/dev/null || true
+          echo "===== App main-thread samples during UI tests ====="
+          for f in $(ls samples/*.txt 2>/dev/null | sort -V); do
+            echo "--- $f ---"
+            # Main thread call graph, trimmed to the interesting depth.
+            awk '/Call graph:/{cg=1} cg && /com.apple.main-thread/{m=1} m{print; c++} c>45{exit}' "$f" | cut -c1-220
+          done
 
       - name: Test summary
         if: always()
@@ -112,4 +132,5 @@ jobs:
           path: |
             *.xcresult
             *.log
+            samples/
           if-no-files-found: ignore

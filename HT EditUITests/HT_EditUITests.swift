@@ -70,7 +70,7 @@ final class HT_EditUITests: XCTestCase {
         let analyzing = app.staticTexts["Analyzing audio…"]
         let finished = NSPredicate(format: "exists == false")
         let expectation = XCTNSPredicateExpectation(predicate: finished, object: analyzing)
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 20), .completed, "Still analyzing after 20 s")
+        expect(XCTWaiter().wait(for: [expectation], timeout: 20) == .completed, "Still analyzing after 20 s", app)
 
         // The player area shows the green video, not black.
         let player = app.descendants(matching: .any).matching(identifier: "playerView").firstMatch
