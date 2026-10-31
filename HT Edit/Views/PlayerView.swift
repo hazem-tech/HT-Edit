@@ -3,40 +3,69 @@
 //  HT Edit
 //
 
-import AVKit
+import AppKit
+import AVFoundation
 import SwiftUI
 
-/// AVKit's `AVPlayerView` with its built-in controls turned off: Apple's
-/// supported way to put a player on screen in AppKit. Transport and scrubbing
-/// live in the timeline.
+/// Video surface: an `AVPlayerLayer` in a plain view. Apple's recommended
+/// approach when the app provides its own transport controls (ours are the
+/// timeline and toolbar).
+///
+/// The view has no intrinsic size and no internal Auto Layout constraints, so
+/// it simply fills whatever SwiftUI offers. (`AVPlayerView` fed a constraint
+/// update loop with SwiftUI's hosting when a video loaded: AppKit eventually
+/// threw "more Update Constraints in Window passes than there are views".)
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .none
-        view.videoGravity = .resizeAspect
-        view.allowsPictureInPicturePlayback = false
-        // Never let the video's own size (e.g. 1920 px wide) drive the layout.
-        for orientation in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
-            view.setContentHuggingPriority(.init(1), for: orientation)
-            view.setContentCompressionResistancePriority(.init(1), for: orientation)
-        }
-        view.player = player
-        view.setAccessibilityIdentifier("playerView")
+    func makeNSView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.playerLayer.player = player
         return view
     }
 
-    func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player {
-            view.player = player
+    func updateNSView(_ view: PlayerLayerView, context: Context) {
+        if view.playerLayer.player !== player {
+            view.playerLayer.player = player
         }
     }
 
-    /// Fill exactly the space SwiftUI offers. `AVPlayerView` otherwise reports
-    /// the video's natural size, which pushed the whole editor wider than the
-    /// window and re-laid out the split views when a video loaded.
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AVPlayerView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PlayerLayerView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 480, height: proposal.height ?? 270)
+    }
+}
+
+final class PlayerLayerView: NSView {
+    let playerLayer = AVPlayerLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        playerLayer.videoGravity = .resizeAspect
+        layer?.addSublayer(playerLayer)
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Video")
+        setAccessibilityIdentifier("playerView")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
+    override func layout() {
+        super.layout()
+        // Resize without the implicit animation.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        CATransaction.commit()
     }
 }
