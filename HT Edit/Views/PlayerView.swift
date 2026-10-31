@@ -40,10 +40,12 @@ final class PlayerLayerView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        // Layer-hosting: the player layer *is* the view's layer, so it always
+        // matches the view's bounds (no manual frame syncing).
         playerLayer.videoGravity = .resizeAspect
-        layer?.addSublayer(playerLayer)
+        playerLayer.backgroundColor = NSColor.black.cgColor
+        layer = playerLayer
+        wantsLayer = true
 
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -58,14 +60,5 @@ final class PlayerLayerView: NSView {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
-    }
-
-    override func layout() {
-        super.layout()
-        // Resize without the implicit animation.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        playerLayer.frame = bounds
-        CATransaction.commit()
     }
 }

@@ -31,12 +31,19 @@ struct WaveformTimelineView: View {
         return seconds.isFinite && seconds > 0 ? seconds : 1
     }
 
-    private var contentWidth: CGFloat { max(viewport.width, 1) * zoom }
+    /// Width available to the timeline, measured *outside* the scroll view so the
+    /// scroll content (sized from it) can never feed back into the layout.
+    @State private var availableWidth: CGFloat = 0
+
+    private var contentWidth: CGFloat { max(availableWidth, 1) * zoom }
     private var pixelsPerSecond: CGFloat { contentWidth / durationSeconds }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             timeline
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    availableWidth = width
+                }
             zoomControl
         }
     }

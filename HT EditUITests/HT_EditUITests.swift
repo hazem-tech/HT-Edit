@@ -100,7 +100,7 @@ final class HT_EditUITests: XCTestCase {
 
     @MainActor
     func testRightClickDeleteRemovesClip() throws {
-        let app = launchWithFixture("h264Landscape", "hevcMP4")
+        let app = launchWithFixture("h264Landscape", "h264Landscape")
         let rows = app.descendants(matching: .any).matching(identifier: "clipRow")
         expect(rows.element(boundBy: 1).waitForExistence(timeout: 30), "Both clips should appear", app)
         XCTAssertEqual(rows.count, 2)

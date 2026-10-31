@@ -35,6 +35,11 @@ struct ClipListView: View {
         .onDeleteCommand {
             delete(selection)
         }
+        .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+            guard !selection.isEmpty else { return .ignored }
+            delete(selection)
+            return .handled
+        }
         .accessibilityIdentifier("clipList")
         .overlay {
             if model.clips.isEmpty {
