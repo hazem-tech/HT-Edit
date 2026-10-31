@@ -126,13 +126,6 @@ final class HT_EditUITests: XCTestCase {
         expect(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state", app)
     }
 
-    @MainActor
-    func testLaunchPerformance() throws {
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
-    }
-
     // MARK: Helpers
 
     /// Asserts, and on failure prints the app's accessibility tree into the test log

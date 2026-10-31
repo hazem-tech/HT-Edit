@@ -10,6 +10,7 @@ import SwiftUI
 struct ClipListView: View {
     let model: EditorViewModel
     @State private var selection = Set<Clip.ID>()
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         List(selection: $selection) {
@@ -25,6 +26,11 @@ struct ClipListView: View {
             }
         }
         .listStyle(.sidebar)
+        .focused($isFocused)
+        // Selecting a clip gives the list keyboard focus, so Delete reaches it.
+        .onChange(of: selection) { _, newValue in
+            if !newValue.isEmpty { isFocused = true }
+        }
         .contextMenu(forSelectionType: Clip.ID.self) { ids in
             if !ids.isEmpty {
                 Button(ids.count == 1 ? "Delete Clip" : "Delete \(ids.count) Clips", systemImage: "trash", role: .destructive) {

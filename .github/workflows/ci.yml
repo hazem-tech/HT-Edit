@@ -51,7 +51,8 @@ jobs:
       - name: Unit tests
         run: |
           set -o pipefail
-          .github/scripts/sample-app.sh unit 2 &
+          touch unit.log
+          .github/scripts/sample-on-log.sh unit.log "Import fixture-portrait" portrait 2 &
           echo $! > unit-sampler.pid
           xcodebuild test-without-building \
             -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
@@ -142,6 +143,12 @@ jobs:
           ' || true
           done
 
+      - name: Export UI-test screenshots
+        if: always()
+        run: |
+          [ -d UITests.xcresult ] && xcrun xcresulttool export attachments --path UITests.xcresult --output-path ui-attachments || true
+          ls ui-attachments 2>/dev/null | head -40 || true
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,4 +158,5 @@ jobs:
             *.xcresult
             *.log
             samples/
+            ui-attachments/
           if-no-files-found: ignore
