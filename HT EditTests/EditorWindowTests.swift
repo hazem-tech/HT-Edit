@@ -48,6 +48,7 @@ struct EditorWindowTests {
         print("[window] \(kind.rawValue): analyzed=\(analyzed) after \(analyzedAt), playback=\(model.playbackStatus) after \(readyAt), error=\(model.errorMessage ?? "none")")
 
         #expect(analyzed, "Analysis didn't finish in the real window")
+        #expect(ready, "Playback never left .preparing in the real window")
         #expect(model.playbackStatus == .ready, "Playback: \(model.playbackStatus)")
         #expect(model.errorMessage == nil)
         #expect(analyzedAt < .seconds(5), "Analysis took \(analyzedAt)")
