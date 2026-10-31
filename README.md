@@ -17,7 +17,7 @@ A native macOS video editor built for Apple silicon. The first feature is **sile
 - **Progressive waveform:** each segment shows its first windows right away, so the waveform fills in from several places at once.
 - **Instant playback:** the timeline and playback are ready as soon as the clip's duration has loaded. The video is drawn with a bare `AVPlayerLayer`.
 - **Cache:** finished analyses are stored in the app's Caches folder, so re-importing a file is instant.
-- **Warm-up at launch:** a splash screen runs the full import path once on a tiny generated clip. This loads the decoder, the reader, the player and the Metal-backed canvas, so the first real import doesn't pay that cost.
+- **Warm-up at launch:** a splash screen runs the full import path once on a tiny generated clip. This loads the decoder, the reader, the player and the waveform canvas, so the first real import doesn't pay that cost.
 
 ## Architecture
 
@@ -49,3 +49,4 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 The app logs each import stage under the subsystem `ht.edit`, with the categories `import`, `analysis` and `playback`. It also emits signposts ("Analyze audio", "Prepare playback").
 - To watch the logs, open Console.app and filter on `subsystem:ht.edit`.
 - To see timings, use Instruments ▸ Points of Interest.
+- To find re-render loops (Debug builds only), launch with the environment variable `HTEDIT_TRACE_BODIES=1`. Each re-render of the main views is then logged with the reason (SwiftUI's `_printChanges`).
