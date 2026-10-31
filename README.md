@@ -36,3 +36,16 @@ Project settings: Swift 6, MainActor-by-default, macOS 27.
 Open `HT Edit.xcodeproj` in Xcode, then:
 - **⌘R** to run the app.
 - **⌘U** to run the unit tests (Swift Testing) and UI tests (XCTest).
+
+### Continuous integration
+
+Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 27, Xcode 27):
+- The build treats **all warnings as errors**, so deprecated APIs and concurrency warnings fail CI.
+- Unit tests include end-to-end imports of generated H.264, HEVC, portrait and audio-only files. They check that playback becomes ready, that frames are not black, that analysis finishes, and that silences are found.
+- UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which imports a generated file inside the app's sandbox. They check the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, and the **+** and Import buttons.
+
+### Diagnostics
+
+The app logs each import stage under the subsystem `ht.edit`, with the categories `import`, `analysis` and `playback`. It also emits signposts ("Analyze audio", "Prepare playback").
+- To watch the logs, open Console.app and filter on `subsystem:ht.edit`.
+- To see timings, use Instruments ▸ Points of Interest.

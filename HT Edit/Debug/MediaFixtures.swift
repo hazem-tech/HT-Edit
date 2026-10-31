@@ -155,15 +155,14 @@ nonisolated enum MediaFixtures {
                 presentationTimeStamp: CMTime(value: CMTimeValue(frame), timescale: fps),
                 decodeTimeStamp: .invalid
             )
-            let sample = try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing)
             // `appendImmediately` + a short sleep instead of the async `append`,
             // which has reports of never resuming.
-            var ready = CMReadySampleBuffer(unsafeBuffer: sample)
             while true {
-                let appended = try receiver.appendImmediately(ready)
-                if appended { break }
+                // Every frame shares one read-only pixel buffer that is never
+                // mutated after it's filled, so handing it to the writer is safe.
+                nonisolated(unsafe) let sample = try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing)
+                if try receiver.appendImmediately(CMReadySampleBuffer(unsafeBuffer: sample)) { break }
                 try await Task.sleep(for: .milliseconds(2))
-                ready = CMReadySampleBuffer(unsafeBuffer: try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing))
             }
         }
         receiver.finish()
