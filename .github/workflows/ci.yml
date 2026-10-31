@@ -71,7 +71,7 @@ jobs:
           ( n=0; while true; do
               sleep 6
               pid=$(pgrep -x "HT Edit" | head -1)
-              if [ -n "$pid" ]; then n=$((n+1)); sudo sample "$pid" 1 -mayDie -file "samples/sample-$n.txt" >/dev/null 2>&1 || true; fi
+              if [ -n "$pid" ]; then n=$((n+1)); sudo /usr/bin/sample "$pid" 1 -mayDie -file "$PWD/samples/sample-$n.txt" >> samples/sampler-errors.txt 2>&1 || true; fi
             done ) &
           echo $! > sampler.pid
           xcodebuild test-without-building \
@@ -116,6 +116,8 @@ jobs:
           PY
           done
           cp ~/Library/Logs/DiagnosticReports/*HT* samples/ 2>/dev/null || true
+          echo "===== Sampler output ====="
+          tail -5 samples/sampler-errors.txt 2>/dev/null || true
           echo "===== App main-thread samples during UI tests ====="
           for f in $(ls samples/*.txt 2>/dev/null | sort -V); do
             echo "--- $f ---"

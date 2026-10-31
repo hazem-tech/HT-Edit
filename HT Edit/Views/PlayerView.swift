@@ -17,6 +17,11 @@ struct PlayerView: NSViewRepresentable {
         view.controlsStyle = .none
         view.videoGravity = .resizeAspect
         view.allowsPictureInPicturePlayback = false
+        // Never let the video's own size (e.g. 1920 px wide) drive the layout.
+        for orientation in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            view.setContentHuggingPriority(.init(1), for: orientation)
+            view.setContentCompressionResistancePriority(.init(1), for: orientation)
+        }
         view.player = player
         view.setAccessibilityIdentifier("playerView")
         return view
@@ -26,5 +31,12 @@ struct PlayerView: NSViewRepresentable {
         if view.player !== player {
             view.player = player
         }
+    }
+
+    /// Fill exactly the space SwiftUI offers. `AVPlayerView` otherwise reports
+    /// the video's natural size, which pushed the whole editor wider than the
+    /// window and re-laid out the split views when a video loaded.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AVPlayerView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 480, height: proposal.height ?? 270)
     }
 }
