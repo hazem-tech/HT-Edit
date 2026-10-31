@@ -82,28 +82,38 @@ struct ContentView: View {
 
     /// Vertical video sits beside the timeline; landscape video sits above it.
     ///
-    /// Plain SwiftUI stacks (not `HSplitView`/`VSplitView`): the split views host
-    /// their panes in AppKit constraint-based hosting views, which fed a layout
-    /// loop with the timeline once media loaded.
-    @ViewBuilder
+    /// Sizes are computed explicitly from the space the editor is given (no
+    /// flexible stack negotiation, no split views), so nothing inside the
+    /// panes can feed back into the layout.
     private var editor: some View {
-        if model.isPortrait {
-            HStack(spacing: 0) {
-                PlayerView(player: model.player)
-                    .frame(minWidth: 220, idealWidth: 340, maxWidth: 420, maxHeight: .infinity)
-                Divider()
-                timelinePane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            let size = CGSize(width: proxy.size.width.rounded(.down), height: proxy.size.height.rounded(.down))
+            Group {
+                if model.isPortrait {
+                    let playerWidth = min(420, max(220, (size.width * 0.4).rounded(.down)))
+                    HStack(spacing: 0) {
+                        PlayerView(player: model.player)
+                            .frame(width: playerWidth, height: size.height)
+                        Divider()
+                        timelinePane
+                            .frame(width: max(0, size.width - playerWidth - 1), height: size.height)
+                    }
+                } else {
+                    let timelineHeight = min(280, max(200, (size.height * 0.4).rounded(.down)))
+                    VStack(spacing: 0) {
+                        PlayerView(player: model.player)
+                            .frame(width: size.width, height: max(0, size.height - timelineHeight - 1))
+                        Divider()
+                        timelinePane
+                            .frame(width: size.width, height: timelineHeight)
+                    }
+                }
             }
-        } else {
-            VStack(spacing: 0) {
-                PlayerView(player: model.player)
-                    .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
-                Divider()
-                timelinePane
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 280)
+            #if DEBUG
+            .onChange(of: size, initial: true) { _, newSize in
+                if BodyTrace.isEnabled { print("[layout] editor size \(newSize)") }
             }
+            #endif
         }
     }
 
