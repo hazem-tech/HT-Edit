@@ -71,6 +71,14 @@ jobs:
             -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
             2>&1 | tee ui.log | xcbeautify --renderer github-actions
 
+      - name: Diagnostics
+        if: always()
+        run: |
+          echo "===== App log (ht.edit) during unit tests ====="
+          grep -E "\[(import|analysis|playback)\]|Import finished|frame color|Cached re-import" unit.log | head -150 || true
+          echo "===== UI hierarchy at UI-test failures ====="
+          sed -n '/---- UI hierarchy at failure/,/---- end hierarchy ----/p' ui.log | head -400 || true
+
       - name: Test summary
         if: always()
         run: |

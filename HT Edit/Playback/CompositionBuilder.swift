@@ -17,6 +17,10 @@ enum CompositionBuilder {
     }
 
     private struct PlacedVideo {
+        /// Held so the track stays valid: an `AVAssetTrack` only weakly
+        /// references its asset, and inserting from a track whose asset has been
+        /// released fails ("The operation could not be completed").
+        var asset: AVURLAsset
         var track: AVAssetTrack
         var sourceRange: CMTimeRange
         var timelineStart: CMTime
@@ -47,6 +51,7 @@ enum CompositionBuilder {
                 let available = timeRange.intersection(clipRange)
                 if available.duration > .zero {
                     videos.append(PlacedVideo(
+                        asset: asset,
                         track: video,
                         sourceRange: available,
                         timelineStart: cursor + available.start,

@@ -30,6 +30,9 @@ actor LevelsCache {
 
     /// Cache key for the file at `url`, or `nil` if its attributes can't be read.
     nonisolated static func key(for url: URL, windowDuration: Double) -> String? {
+        // `URL` caches resource values; read fresh ones so an edited file gets a new key.
+        var url = url
+        url.removeAllCachedResourceValues()
         guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
               let size = values.fileSize else { return nil }
         let modified = values.contentModificationDate?.timeIntervalSinceReferenceDate ?? 0

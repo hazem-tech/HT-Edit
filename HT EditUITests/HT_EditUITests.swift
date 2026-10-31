@@ -64,7 +64,7 @@ final class HT_EditUITests: XCTestCase {
         let app = launchWithFixture("h264Landscape")
 
         let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "Clip row didn't appear")
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
 
         // "Analyzing audio…" must go away.
         let analyzing = app.staticTexts["Analyzing audio…"]
@@ -74,7 +74,7 @@ final class HT_EditUITests: XCTestCase {
 
         // The player area shows the green video, not black.
         let player = app.descendants(matching: .any).matching(identifier: "playerView").firstMatch
-        XCTAssertTrue(player.waitForExistence(timeout: 10))
+        expect(player.waitForExistence(timeout: 10), "Player view not found", app)
         let start = Date()
         var green = 0.0
         repeat {
@@ -83,14 +83,14 @@ final class HT_EditUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.25)
         } while Date().timeIntervalSince(start) < 10
         add(XCTAttachment(screenshot: app.screenshot()))
-        XCTAssertGreaterThan(green, 0.3, "Player area isn't showing the video (green fraction \(green))")
+        expect(green > 0.3, "Player area isn't showing the video (green fraction \(green))", app)
     }
 
     @MainActor
     func testToolbarAddButtonOpensFilePickerWithMediaLoaded() throws {
         let app = launchWithFixture("h264Landscape")
         let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
 
         let addButton = app.buttons["addButton"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
@@ -102,12 +102,12 @@ final class HT_EditUITests: XCTestCase {
     func testRightClickDeleteRemovesClip() throws {
         let app = launchWithFixture("h264Landscape", "hevcMP4")
         let rows = app.descendants(matching: .any).matching(identifier: "clipRow")
-        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 30), "Both clips should appear")
+        expect(rows.element(boundBy: 1).waitForExistence(timeout: 30), "Both clips should appear", app)
         XCTAssertEqual(rows.count, 2)
 
         rows.element(boundBy: 0).rightClick()
         let delete = app.menuItems["Delete Clip"]
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "Context menu has no Delete item")
+        expect(delete.waitForExistence(timeout: 5), "Context menu has no Delete item", app)
         delete.click()
 
         let oneLeft = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 1"), object: rows)
@@ -118,12 +118,12 @@ final class HT_EditUITests: XCTestCase {
     func testDeleteKeyRemovesSelectedClip() throws {
         let app = launchWithFixture("h264Landscape")
         let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
 
         row.click()
         app.typeKey(.delete, modifierFlags: [])
 
-        XCTAssertTrue(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state")
+        expect(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state", app)
     }
 
     @MainActor
@@ -134,6 +134,17 @@ final class HT_EditUITests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Asserts, and on failure prints the app's accessibility tree into the test log
+    /// so CI shows what was on screen (alerts, missing views, wrong state).
+    @MainActor
+    private func expect(_ condition: Bool, _ message: String, _ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        if !condition {
+            print("---- UI hierarchy at failure: \(message) ----\n\(app.debugDescription)\n---- end hierarchy ----")
+            add(XCTAttachment(screenshot: app.screenshot()))
+        }
+        XCTAssertTrue(condition, message, file: file, line: line)
+    }
 
     @MainActor
     private func waitForOpenPanel(in app: XCUIApplication) -> Bool {

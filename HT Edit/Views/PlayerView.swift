@@ -18,6 +18,7 @@ struct PlayerView: NSViewRepresentable {
         view.videoGravity = .resizeAspect
         view.allowsPictureInPicturePlayback = false
         view.player = player
+        view.setAccessibilityIdentifier("playerView")
         return view
     }
 
