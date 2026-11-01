@@ -36,9 +36,6 @@ jobs:
       - name: Allow UI automation
         run: sudo automationmodetool enable-automationmode-without-authentication || true
 
-      - name: Use dark mode
-        run: defaults write -g AppleInterfaceStyle Dark || true
-
       - name: Build
         run: |
           set -o pipefail
