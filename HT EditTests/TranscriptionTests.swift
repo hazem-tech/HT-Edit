@@ -108,6 +108,7 @@ struct SpeechAudioExtractorTests {
 
     @Test func writtenAudioFileHasAllSamples() throws {
         let directory = makeTemporaryDirectory("speech-audio-file")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "speech.caf")
         try SpeechAudioExtractor.writeAudioFile(Array(repeating: 0.25, count: 16_000), to: url)
