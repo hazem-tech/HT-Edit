@@ -2,6 +2,18 @@
 
 A native macOS video editor built for Apple silicon. The first feature is **silence detection**: import one or more videos, and every silent stretch is highlighted on the audio waveform right away. You can tune the highlights live, and playback skips the silences.
 
+## Screenshots
+
+Two clips on one timeline. Silences are highlighted on the waveform, and a yellow line marks where the second clip starts:
+
+![Two landscape clips on the timeline, with silences highlighted](docs/screenshots/landscape.png)
+
+| Vertical video | Empty editor |
+|---|---|
+| ![A portrait clip, with the player beside the timeline](docs/screenshots/portrait.png) | ![The editor before anything is imported](docs/screenshots/empty-state.png) |
+
+The clips are test videos the app generates itself: solid green frames, with a tone, then silence, then a tone. CI captures these screenshots by running the `ReadmeScreenshots` UI tests. To refresh them, run the **README screenshots** workflow.
+
 ## Features
 
 - **Import:** ⌘O, the **+** toolbar button, or drag and drop. You can import several files at once; new clips are added to the end.

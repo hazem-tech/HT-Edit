@@ -1,0 +1,100 @@
+name: README screenshots
+
+# Runs the ReadmeScreenshots UI tests on macOS, exports the screenshots to
+# docs/screenshots/ and commits them to the branch that triggered the run.
+# Pushes made with GITHUB_TOKEN don't trigger workflows, so this can't loop.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "HT EditUITests/ReadmeScreenshots.swift"
+      - ".github/workflows/screenshots.yml"
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  PROJECT: HT Edit.xcodeproj
+  SCHEME: HT Edit
+  DESTINATION: platform=macOS
+  DERIVED_DATA: ${{ github.workspace }}/DerivedData
+  SIGNING: CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+
+jobs:
+  screenshots:
+    name: Capture README screenshots
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Allow UI automation
+        run: sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: Use dark mode
+        run: defaults write -g AppleInterfaceStyle Dark || true
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" $SIGNING \
+            2>&1 | xcbeautify --renderer github-actions
+
+      - name: Capture
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -only-testing:"HT EditUITests/ReadmeScreenshots" \
+            -resultBundlePath Screenshots.xcresult \
+            2>&1 | xcbeautify --renderer github-actions
+
+      - name: Export
+        run: |
+          xcrun xcresulttool export attachments --path Screenshots.xcresult --output-path attachments
+          mkdir -p docs/screenshots
+          python3 - <<'PY'
+          import json, re, shutil
+          manifest = json.load(open("attachments/manifest.json"))
+          found = 0
+          for test in manifest:
+              for item in test.get("attachments", []):
+                  match = re.search(r"readme-([a-z0-9-]+)", item.get("suggestedHumanReadableName", ""))
+                  if match:
+                      target = f"docs/screenshots/{match.group(1)}.png"
+                      shutil.copy(f"attachments/{item['exportedFileName']}", target)
+                      print("exported", target)
+                      found += 1
+          if not found:
+              raise SystemExit("No readme-* attachments found")
+          PY
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme-screenshots
+          path: |
+            docs/screenshots/
+            Screenshots.xcresult
+          if-no-files-found: ignore
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          if git diff --cached --quiet; then
+            echo "Screenshots unchanged"
+            exit 0
+          fi
+          git commit -m "Update README screenshots"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
