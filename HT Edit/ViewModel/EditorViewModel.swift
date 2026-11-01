@@ -39,6 +39,8 @@ final class EditorViewModel {
     /// Bumped whenever stored levels change, so views depending on them refresh.
     private(set) var levelsRevision = 0
     var errorMessage: String?
+    /// Arabic speech-to-text of the timeline's clips.
+    let transcription = TranscriptionViewModel()
 
     var settings = SilenceSettings.default {
         didSet {
@@ -81,6 +83,14 @@ final class EditorViewModel {
     }
 
     var totalSilenceDuration: CMTime { SilenceDetector.totalDuration(of: silences) }
+
+    /// Transcript segments placed on the timeline (follows clip reordering).
+    var transcriptLines: [TranscriptLine] {
+        TranscriptTimeline.lines(
+            clips: placedClips.map { (id: $0.id, duration: $0.duration.seconds) },
+            segments: transcription.segmentsByClip
+        )
+    }
 
     // MARK: Private state
 
@@ -160,10 +170,12 @@ final class EditorViewModel {
             }
         }
         clips.removeAll { ids.contains($0.id) }
+        transcription.removeClips(ids)
         levelsRevision += 1
         recomputeSilences()
 
         if clips.isEmpty {
+            transcription.clear()
             compositionTask?.cancel()
             compositionGeneration += 1
             player.pause()
@@ -236,6 +248,13 @@ final class EditorViewModel {
     private func updateClip(_ id: UUID, _ update: (inout Clip) -> Void) {
         guard let index = clips.firstIndex(where: { $0.id == id }) else { return }
         update(&clips[index])
+    }
+
+    // MARK: Transcription
+
+    /// Transcribes every placed clip with `engine`.
+    func transcribe(with engine: any TranscriptionEngine, modelName: String) {
+        transcription.start(clips: placedClips.map { (id: $0.id, url: $0.url) }, engine: engine, modelName: modelName)
     }
 
     // MARK: Transport

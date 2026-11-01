@@ -34,13 +34,15 @@ jobs:
       - name: Allow UI automation
         run: sudo automationmodetool enable-automationmode-without-authentication || true
 
+      # Warnings are errors via the targets' own build settings
+      # (SWIFT_TREAT_WARNINGS_AS_ERRORS in project.pbxproj), so Swift packages
+      # aren't affected.
       - name: Build (warnings are errors)
         run: |
           set -o pipefail
           xcodebuild build-for-testing \
             -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
             -derivedDataPath "$DERIVED_DATA" \
-            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES GCC_TREAT_WARNINGS_AS_ERRORS=YES \
             $SIGNING \
             2>&1 | tee build.log | xcbeautify --renderer github-actions
 

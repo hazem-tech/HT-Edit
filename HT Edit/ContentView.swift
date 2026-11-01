@@ -13,6 +13,9 @@ struct ContentView: View {
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var speechModels = SpeechModelStore()
+    @State private var isModelPickerPresented = false
+    @State private var inspectorTab = InspectorTab.silence
 
     init(model: EditorViewModel = EditorViewModel()) {
         _model = State(initialValue: model)
@@ -36,10 +39,18 @@ struct ContentView: View {
                 }
             }
             .inspector(isPresented: inspectorBinding) {
-                SilenceSettingsPanel(model: model)
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+                InspectorView(
+                    model: model,
+                    speechModels: speechModels,
+                    tab: $inspectorTab,
+                    isModelPickerPresented: $isModelPickerPresented
+                )
+                .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
             }
             .toolbar { toolbar }
+            .sheet(isPresented: $isModelPickerPresented) {
+                SpeechModelPickerView(store: speechModels)
+            }
             .fileImporter(
                 isPresented: $isImporterPresented,
                 allowedContentTypes: [.audiovisualContent],
@@ -158,11 +169,17 @@ struct ContentView: View {
             .disabled(!model.hasMedia)
             .help("Play / Pause (Space)")
 
+            Button("Speech Models", systemImage: "waveform.badge.mic") {
+                isModelPickerPresented = true
+            }
+            .help("Choose and download Arabic speech-to-text models")
+            .accessibilityIdentifier("speechModelsButton")
+
             Button("Inspector", systemImage: "sidebar.trailing") {
                 isInspectorPresented.toggle()
             }
             .disabled(!model.hasMedia)
-            .help("Show or hide silence settings")
+            .help("Show or hide the inspector (silence settings and transcript)")
         }
     }
 

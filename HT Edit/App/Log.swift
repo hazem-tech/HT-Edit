@@ -13,6 +13,7 @@ nonisolated enum Log {
     static let importing = Logger(subsystem: subsystem, category: "import")
     static let analysis = Logger(subsystem: subsystem, category: "analysis")
     static let playback = Logger(subsystem: subsystem, category: "playback")
+    static let transcription = Logger(subsystem: subsystem, category: "transcription")
 
     static let signposter = OSSignposter(subsystem: subsystem, category: .pointsOfInterest)
 }
