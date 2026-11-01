@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: HT Edit.xcodeproj
+  SCHEME: HT Edit
+  DESTINATION: platform=macOS
+  DERIVED_DATA: ${{ github.workspace }}/DerivedData
+  # Ad-hoc signing so CI needs no Apple developer account.
+  SIGNING: CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+
+jobs:
+  build-and-test:
+    name: Build & test (Xcode 27, macOS 27)
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+          swift --version
+
+      - name: Allow UI automation
+        run: sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: Build (warnings are errors)
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES GCC_TREAT_WARNINGS_AS_ERRORS=YES \
+            $SIGNING \
+            2>&1 | tee build.log | xcbeautify --renderer github-actions
+
+      - name: Show build errors
+        if: failure()
+        run: grep -E "error:|warning:" build.log | sort -u | head -200 || true
+
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          touch unit.log
+          .github/scripts/sample-on-log.sh unit.log "Import fixture-portrait" portrait 2 &
+          echo $! > unit-sampler.pid
+          xcodebuild test-without-building \
+            -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -only-testing:"HT EditTests" \
+            -resultBundlePath UnitTests.xcresult \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 120 \
+            2>&1 | tee unit.log | xcbeautify --renderer github-actions
+
+      - name: UI tests
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          # The app runs in its own process during UI tests: stream its log and
+          # take stack samples so a hang shows exactly where the main thread is.
+          log stream --style compact --level debug --predicate 'subsystem == "ht.edit"' > app-ui.log 2>&1 &
+          echo $! > log-stream.pid
+          kill "$(cat unit-sampler.pid 2>/dev/null)" 2>/dev/null || true
+          .github/scripts/sample-app.sh ui 4 &
+          echo $! > sampler.pid
+          xcodebuild test-without-building \
+            -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -only-testing:"HT EditUITests" \
+            -resultBundlePath UITests.xcresult \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
+            2>&1 | tee ui.log | xcbeautify --renderer github-actions
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          echo "===== App log (ht.edit) during unit tests ====="
+          grep -E "\[(import|analysis|playback)\]|Import finished|frame color|Cached re-import" unit.log | head -150 || true
+          echo "===== UI hierarchy at UI-test failures ====="
+          sed -n '/---- UI hierarchy at failure/,/---- end hierarchy ----/p' ui.log | grep -vE "MenuItem|MenuBarItem|^\s*Menu," | head -300 || true
+          kill "$(cat log-stream.pid 2>/dev/null)" "$(cat sampler.pid 2>/dev/null)" 2>/dev/null || true
+          echo "===== App log (ht.edit) during UI tests ====="
+          grep -vE "Segment [0-9]+\.\.<" app-ui.log 2>/dev/null | head -400 || true
+          echo "===== Crash reports ====="
+          ls -t ~/Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.ips 2>/dev/null | grep -E "HT Edit|HT EditUITests" | head -4 | while IFS= read -r f; do
+            echo "--- $f ---"
+            python3 - "$f" <<'PY' || head -c 6000 "$f"
+          import json, sys
+          text = open(sys.argv[1]).read()
+          header, _, body = text.partition("\n")
+          report = json.loads(body)
+          ex = report.get("exception", {})
+          print("exception:", ex.get("type"), ex.get("signal"), ex.get("codes"), report.get("termination", {}).get("indicator"))
+          for key in ("asi", "lastExceptionBacktrace"):
+              if key in report: print(key, ":", json.dumps(report[key])[:1500])
+          images = report.get("usedImages", [])
+          faulting = report.get("faultingThread", 0)
+          for index, thread in enumerate(report.get("threads", [])):
+              if index != faulting and not thread.get("queue", "").endswith("main-thread"):
+                  continue
+              print(f"thread {index} queue={thread.get('queue')} triggered={thread.get('triggered')}")
+              for frame in thread.get("frames", [])[:40]:
+                  image = images[frame.get("imageIndex", 0)].get("name", "?") if images else "?"
+                  print("   ", image, frame.get("symbol", hex(frame.get("imageOffset", 0))), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+          PY
+          done
+          cp ~/Library/Logs/DiagnosticReports/*HT* samples/ 2>/dev/null || true
+          echo "===== Main-thread samples ====="
+          .github/scripts/print-samples.sh
+
+      - name: Test summary
+        if: always()
+        run: |
+          for bundle in UnitTests.xcresult UITests.xcresult; do
+            [ -d "$bundle" ] || continue
+            echo "===== $bundle ====="
+            xcrun xcresulttool get test-results summary --path "$bundle" || true
+            echo "----- failures -----"
+            xcrun xcresulttool get test-results tests --path "$bundle" \
+              | python3 -c '
+          import json, sys
+          def walk(node, path):
+              name = node.get("name", "")
+              result = node.get("result", "")
+              kids = node.get("children", [])
+              if node.get("nodeType") == "Failure Message":
+                  print("  ", " / ".join(path), "::", name)
+              for kid in kids:
+                  walk(kid, path + [name] if node.get("nodeType") in ("Test Suite", "Test Case", "Unit test bundle", "UI test bundle") else path)
+          data = json.load(sys.stdin)
+          for node in data.get("testNodes", []):
+              walk(node, [])
+          ' || true
+          done
+
+      - name: Export UI-test screenshots
+        if: always()
+        run: |
+          [ -d UITests.xcresult ] && xcrun xcresulttool export attachments --path UITests.xcresult --output-path ui-attachments || true
+          ls ui-attachments 2>/dev/null | head -40 || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            *.xcresult
+            *.log
+            samples/
+            ui-attachments/
+          if-no-files-found: ignore
