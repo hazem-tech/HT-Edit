@@ -32,6 +32,8 @@ final class EditorViewModel {
     // MARK: State
 
     let player: AVPlayer
+    /// Transcript, captions and summary for the clips on the timeline.
+    let transcription: TranscriptionModel
     private(set) var clips: [Clip] = []
     private(set) var currentTime: CMTime = .zero
     private(set) var silences: [CMTimeRange] = []
@@ -104,15 +106,21 @@ final class EditorViewModel {
     private static let levelsPublishInterval: Duration = .milliseconds(50)
     private static let playerReadyTimeout: Duration = .seconds(15)
 
-    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer()) {
+    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(), transcription: TranscriptionModel = TranscriptionModel()) {
         self.analyzer = analyzer
+        self.transcription = transcription
         self.player = AVPlayer()
         configurePlayer()
     }
 
     /// Creates a model with pre-analyzed clips (used by tests and previews).
-    init(analyzedClips: [(clip: Clip, levels: AudioLevels)], settings: SilenceSettings = .default) {
+    init(
+        analyzedClips: [(clip: Clip, levels: AudioLevels)],
+        settings: SilenceSettings = .default,
+        transcription: TranscriptionModel = TranscriptionModel()
+    ) {
         self.analyzer = AudioLevelAnalyzer(cache: nil)
+        self.transcription = transcription
         self.player = AVPlayer()
         self.clips = analyzedClips.map { entry in
             var clip = entry.clip
@@ -125,6 +133,7 @@ final class EditorViewModel {
         self.settings = settings
         configurePlayer()
         recomputeSilences()
+        syncTranscriptLayout()
     }
 
     // MARK: Clips
@@ -146,6 +155,7 @@ final class EditorViewModel {
     func moveClips(fromOffsets offsets: IndexSet, toOffset destination: Int) {
         clips = ClipTimeline.moving(clips, fromOffsets: offsets, toOffset: destination)
         recomputeSilences()
+        syncTranscriptLayout()
         rebuildPlayerItem()
     }
 
@@ -162,6 +172,7 @@ final class EditorViewModel {
         clips.removeAll { ids.contains($0.id) }
         levelsRevision += 1
         recomputeSilences()
+        syncTranscriptLayout()
 
         if clips.isEmpty {
             compositionTask?.cancel()
@@ -197,6 +208,7 @@ final class EditorViewModel {
                     $0.presentationSize = size
                 }
                 Log.importing.notice("\(name, privacy: .public): \(duration.seconds) s, \(Int(size.width))×\(Int(size.height))")
+                syncTranscriptLayout()
 
                 // 2. Playback and thumbnail are prepared in their own tasks; the
                 //    waveform never waits for them.
@@ -258,11 +270,37 @@ final class EditorViewModel {
         var target = CMTimeMaximum(.zero, time)
         if upper > .zero { target = CMTimeMinimum(target, upper) }
         currentTime = target
+        transcription.updatePlayhead(target.seconds)
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     func seek(toSeconds seconds: Double) {
         seek(to: CMTime(seconds: seconds, preferredTimescale: 48_000))
+    }
+
+    // MARK: Transcription
+
+    /// Transcribes every clip (cached clips cost no request). Clips whose
+    /// analyzed audio never rises above the speech floor are skipped.
+    func transcribe() {
+        let silent = placedClips.filter { Self.hasNoSpeech(levelsStore[$0.id]) }.map(\.id)
+        transcription.transcribe(silentClips: Set(silent))
+    }
+
+    /// Below this level (dBFS) everywhere, a clip holds no speech worth sending.
+    static let speechFloorDB: Float = -55
+
+    static func hasNoSpeech(_ levels: AudioLevels) -> Bool {
+        levels.isComplete && !levels.rmsDB.isEmpty && (levels.rmsDB.max() ?? 0) < speechFloorDB
+    }
+
+    /// Tells the transcript where each placed clip sits on the timeline.
+    private func syncTranscriptLayout() {
+        let placed = placedClips
+        let starts = ClipTimeline.starts(for: placed.map(\.duration))
+        transcription.updateLayout(zip(placed, starts).map { clip, start in
+            TranscriptionModel.ClipSlot(id: clip.id, url: clip.url, name: clip.name, start: start.seconds, duration: clip.duration.seconds)
+        })
     }
 
     // MARK: Composition
@@ -374,6 +412,7 @@ final class EditorViewModel {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.currentTime = time
+                self.transcription.updatePlayhead(time.seconds)
                 self.skipIfInsideSilence()
             }
         }

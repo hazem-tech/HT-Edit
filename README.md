@@ -22,6 +22,19 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
+- **Transcript:** open the inspector's **Transcript** tab and press **Transcribe**. Each line is highlighted while it plays (and shown as a caption on the video); click a line to jump to it. **Summarize** writes a short AI summary.
+
+### Transcription (Gemini)
+
+- **Timing:** speech-to-text uses Gemini's dedicated speech model with word timestamps. Words are grouped into short phrases (sentence ends, pauses, length), so a click lands on the phrase being spoken.
+- **Quality** (gear button): **Low** (default) is the cheapest: one request per clip. **Medium** and **High** also polish the text with a stronger model (one more request per clip). **High** needs a paid API key.
+- **Context and key words** (optional): when filled in, one extra request fixes names and terms. Timings never change. When empty, Low makes no extra request.
+- **Few requests:** nothing runs until you press a button. Audio is sent as small mono AAC (about 240 KB per minute) in the same request, so there's no separate upload. Clips with no speech are skipped. Results are cached in the app's Caches folder: re-importing a file, reordering clips, or changing only the context never sends the audio again. Clips longer than 25 minutes are sent in 25-minute parts.
+- **API key:** paste your own key in the transcript settings; it is stored in the Keychain. A default key can be bundled from `HT Edit/Transcription/GeminiAPIKey.txt` (one line, git-ignored, never committed):
+
+  ```sh
+  echo "YOUR_GEMINI_API_KEY" > "HT Edit/Transcription/GeminiAPIKey.txt"
+  ```
 
 ## Speed
 
@@ -39,6 +52,7 @@ The clips are test videos the app generates itself: solid green frames, with a t
 | Detection | `Analysis/SilenceDetector.swift`, `Model/ClipTimeline.swift` |
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
+| Transcription | `Transcription/GeminiClient.swift` (REST), `AudioExtractor.swift`, `TranscriptionService.swift`, `TranscriptCache.swift`, `Transcript.swift` (phrases, timeline mapping), `TranscriptionModel.swift` |
 | UI | `ContentView.swift`, `Views/*`, `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
@@ -58,7 +72,7 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 
 ### Diagnostics
 
-The app logs each import stage under the subsystem `ht.edit`, with the categories `import`, `analysis` and `playback`. It also emits signposts ("Analyze audio", "Prepare playback").
+The app logs each import stage under the subsystem `ht.edit`, with the categories `import`, `analysis`, `playback` and `transcription`. It also emits signposts ("Analyze audio", "Prepare playback").
 - To watch the logs, open Console.app and filter on `subsystem:ht.edit`.
 - To see timings, use Instruments ▸ Points of Interest.
 - To find re-render loops (Debug builds only), launch with the environment variable `HTEDIT_TRACE_BODIES=1`. Each re-render of the main views is then logged with the reason (SwiftUI's `_printChanges`).

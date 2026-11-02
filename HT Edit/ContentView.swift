@@ -36,8 +36,8 @@ struct ContentView: View {
                 }
             }
             .inspector(isPresented: inspectorBinding) {
-                SilenceSettingsPanel(model: model)
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+                InspectorView(model: model)
+                    .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
             }
             .toolbar { toolbar }
             .fileImporter(
@@ -92,7 +92,7 @@ struct ContentView: View {
                 if model.isPortrait {
                     let playerWidth = min(420, max(220, (size.width * 0.4).rounded(.down)))
                     HStack(spacing: 0) {
-                        PlayerView(player: model.player)
+                        playerPane
                             .frame(width: playerWidth, height: size.height)
                         Divider()
                         timelinePane
@@ -101,7 +101,7 @@ struct ContentView: View {
                 } else {
                     let timelineHeight = min(280, max(200, (size.height * 0.4).rounded(.down)))
                     VStack(spacing: 0) {
-                        PlayerView(player: model.player)
+                        playerPane
                             .frame(width: size.width, height: max(0, size.height - timelineHeight - 1))
                         Divider()
                         timelinePane
@@ -115,6 +115,12 @@ struct ContentView: View {
             }
             #endif
         }
+    }
+
+    /// The video with the current transcript phrase captioned over it.
+    private var playerPane: some View {
+        PlayerView(player: model.player)
+            .overlay { CaptionOverlay(model: model.transcription) }
     }
 
     private var timelinePane: some View {
@@ -162,7 +168,7 @@ struct ContentView: View {
                 isInspectorPresented.toggle()
             }
             .disabled(!model.hasMedia)
-            .help("Show or hide silence settings")
+            .help("Show or hide silence settings and the transcript")
         }
     }
 
