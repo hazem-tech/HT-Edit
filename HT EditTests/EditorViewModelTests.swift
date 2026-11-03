@@ -3,6 +3,8 @@
 //  HT EditTests
 //
 
+import AppKit
+import AVFoundation
 import CoreMedia
 import Foundation
 import Testing
