@@ -126,6 +126,47 @@ final class HT_EditUITests: XCTestCase {
         expect(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state", app)
     }
 
+    // MARK: Timeline
+
+    /// Dragging the zoom slider end to end (and Fit) used to crash the app.
+    @MainActor
+    func testZoomSliderEndToEndDoesNotCrash() throws {
+        let app = launchWithFixture("h264Landscape")
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+
+        let slider = app.sliders["zoomSlider"]
+        expect(slider.waitForExistence(timeout: 10), "Zoom slider not found", app)
+        for position in [1.0, 0.0, 0.75, 0.25, 1.0] {
+            slider.adjust(toNormalizedSliderPosition: CGFloat(position))
+        }
+        app.buttons["zoomFitButton"].click()
+
+        expect(app.state == .runningForeground, "App stopped while zooming", app)
+        expect(app.descendants(matching: .any).matching(identifier: "timeline").firstMatch.exists, "Timeline is gone after zooming", app)
+    }
+
+    /// Space and J/L work even when the clip list has focus.
+    @MainActor
+    func testTransportKeysWorkWithTheClipListFocused() throws {
+        let app = launchWithFixture("h264Landscape")
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+        row.click()
+
+        // The first L starts playback, the next ones speed it up; the speed
+        // badge stays after the short fixture finishes.
+        app.typeKey("l", modifierFlags: [])
+        app.typeKey("l", modifierFlags: [])
+        app.typeKey("l", modifierFlags: [])
+        let badge = app.descendants(matching: .any).matching(identifier: "playbackRate").firstMatch
+        expect(badge.waitForExistence(timeout: 5), "Speed badge didn't appear after pressing L", app)
+
+        app.typeKey(" ", modifierFlags: [])
+        expect(app.state == .runningForeground, "App stopped after Space", app)
+        expect(row.exists, "Space must not affect the clip list", app)
+    }
+
     // MARK: Transcript
 
     /// With the fake transcriber (no Google sign-in needed): the Transcript tab

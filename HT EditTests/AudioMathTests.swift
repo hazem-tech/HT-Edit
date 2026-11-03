@@ -179,6 +179,15 @@ struct WaveformSamplerTests {
         #expect(result == [-99, -10])
     }
 
+    @Test func nonFiniteOrHugePositionsUseFillInsteadOfTrapping() {
+        let levels: [Float] = [-10, -20]
+        #expect(WaveformSampler.buckets(levels, startWindow: .nan, windowsPerBucket: 1, count: 2, fill: -99) == [-99, -99])
+        #expect(WaveformSampler.buckets(levels, startWindow: 0, windowsPerBucket: .infinity, count: 2, fill: -99) == [-99, -99])
+        #expect(WaveformSampler.buckets(levels, startWindow: 1e300, windowsPerBucket: 1, count: 2, fill: -99) == [-99, -99])
+        #expect(WaveformSampler.buckets(levels, startWindow: -1e300, windowsPerBucket: 1, count: 2, fill: -99) == [-99, -99])
+        #expect(WaveformSampler.buckets(levels, startWindow: 0, windowsPerBucket: 1e300, count: 2, fill: -99) == [-10, -99])
+    }
+
     @Test func emptyInputs() {
         #expect(WaveformSampler.buckets([], startWindow: 0, windowsPerBucket: 1, count: 3, fill: -1) == [-1, -1, -1])
         #expect(WaveformSampler.buckets([1], startWindow: 0, windowsPerBucket: 1, count: 0).isEmpty)

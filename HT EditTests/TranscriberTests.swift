@@ -204,8 +204,8 @@ struct TranscriptionControllerTests {
 
     @Test func modelChoiceFallsBackToTheCheapestAvailableAndIsRemembered() async throws {
         let defaults = try #require(UserDefaults(suiteName: "transcription-\(UUID().uuidString)"))
-        let lite = TranscriptionModel.catalog[1]
-        let flash = TranscriptionModel.catalog[3]
+        let lite = try ExpectedCatalog.model(ExpectedCatalog.medium)
+        let flash = try ExpectedCatalog.model(ExpectedCatalog.high)
         let controller = TranscriptionController(engine: ScriptedEngine(status: .ready([lite, flash])), cache: nil, defaults: defaults)
 
         await controller.refreshStatus()

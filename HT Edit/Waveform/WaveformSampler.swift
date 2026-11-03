@@ -27,15 +27,22 @@ nonisolated enum WaveformSampler {
         fill: Float = AudioLevels.floorDB
     ) -> [Float] {
         guard count > 0 else { return [] }
-        guard !levels.isEmpty, windowsPerBucket > 0 else {
+        guard !levels.isEmpty, windowsPerBucket.isFinite, windowsPerBucket > 0, startWindow.isFinite else {
             return Array(repeating: fill, count: count)
+        }
+
+        // Positions far outside the levels are clamped just past either end
+        // before converting to Int, which traps on huge or non-finite values.
+        let limit = Double(levels.count) + 1
+        func windowIndex(_ position: Double) -> Int {
+            Int(min(limit, max(-1, position)).rounded(.down))
         }
 
         return levels.withUnsafeBufferPointer { source in
             [Float](unsafeUninitializedCapacity: count) { output, initialized in
                 for bucket in 0..<count {
-                    let lower = Int((startWindow + Double(bucket) * windowsPerBucket).rounded(.down))
-                    let upper = max(lower + 1, Int((startWindow + Double(bucket + 1) * windowsPerBucket).rounded(.down)))
+                    let lower = windowIndex(startWindow + Double(bucket) * windowsPerBucket)
+                    let upper = max(lower + 1, windowIndex(startWindow + Double(bucket + 1) * windowsPerBucket))
                     let clampedLower = max(0, lower)
                     let clampedUpper = min(source.count, upper)
                     if clampedLower < clampedUpper {

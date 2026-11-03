@@ -27,20 +27,27 @@ struct WaveformTimelineView: View {
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     /// Last measured visible width, used by `setZoom` outside of layout.
     @State private var visibleWidth: CGFloat = 0
-
-    static let zoomRange: ClosedRange<Double> = 1...400
+    /// Whether playback pages the timeline to keep the playhead in view.
+    /// Turned off when the user scrolls by hand; back on when playback starts.
+    @State private var followsPlayhead = true
+    /// Offset changes before this moment come from our own scrolling or
+    /// zooming, so they aren't mistaken for the user scrolling.
+    @State private var ignoreScrollChangesUntil = Date.distantPast
 
     private var durationSeconds: Double {
-        let seconds = model.timelineDuration.seconds
-        return seconds.isFinite && seconds > 0 ? seconds : 1
+        TimelineZoom.safeDuration(model.timelineDuration.seconds)
+    }
+
+    private var maxZoom: Double {
+        TimelineZoom.maxZoom(duration: durationSeconds, visibleWidth: visibleWidth)
     }
 
     private func contentWidth(visible width: CGFloat) -> CGFloat {
-        (max(width, 1) * zoom).rounded(.down)
+        TimelineZoom.contentWidth(zoom: zoom, visibleWidth: width)
     }
 
     private func pixelsPerSecond(visible width: CGFloat) -> CGFloat {
-        contentWidth(visible: width) / durationSeconds
+        TimelineZoom.pixelsPerSecond(zoom: zoom, visibleWidth: width, duration: durationSeconds)
     }
 
     var body: some View {
@@ -57,6 +64,15 @@ struct WaveformTimelineView: View {
             .accessibilityIdentifier("timeline")
             zoomControl
         }
+        .onChange(of: model.isPlaying) { _, isPlaying in
+            guard isPlaying else { return }
+            followsPlayhead = true
+            revealPlayhead()
+        }
+        .onChange(of: durationSeconds) { _, _ in
+            suppressScrollTracking()
+            zoom = TimelineZoom.clamp(zoom, duration: durationSeconds, visibleWidth: visibleWidth)
+        }
     }
 
     private func timeline(visibleWidth width: CGFloat) -> some View {
@@ -68,13 +84,21 @@ struct WaveformTimelineView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            guard scale > 0 else { return }
                             model.seek(toSeconds: Double(value.location.x / scale))
                         }
                 )
         }
         .scrollPosition($scrollPosition)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x.rounded() } action: { _, newValue in
-            scrollOffset = newValue
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x.rounded() } action: { oldValue, newValue in
+            scrollOffset = newValue.isFinite ? newValue : 0
+            if Date.now >= ignoreScrollChangesUntil, model.isPlaying, abs(newValue - oldValue) >= 1 {
+                // A mouse wheel may scroll without reporting a scroll phase.
+                followsPlayhead = false
+            }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            if newPhase == .interacting { followsPlayhead = false }
         }
         .background {
             WaveformCanvas(
@@ -91,7 +115,8 @@ struct WaveformTimelineView: View {
                 offset: scrollOffset,
                 viewportWidth: width,
                 pixelsPerSecond: scale,
-                scrollPosition: $scrollPosition
+                followsPlayhead: followsPlayhead,
+                scrollTo: { scroll(to: $0) }
             )
             .allowsHitTesting(false)
         }
@@ -108,20 +133,30 @@ struct WaveformTimelineView: View {
         // never this view's size, so it can't cause a layout loop.
         .onChange(of: width, initial: true) { _, newWidth in
             visibleWidth = newWidth
+            suppressScrollTracking()
+            zoom = TimelineZoom.clamp(zoom, duration: durationSeconds, visibleWidth: newWidth)
         }
     }
 
     private var zoomControl: some View {
         HStack {
             Image(systemName: "minus.magnifyingglass")
-            Slider(value: Binding(get: { zoom }, set: { setZoom($0) }), in: Self.zoomRange) {
+            Slider(
+                value: Binding(
+                    get: { TimelineZoom.sliderPosition(forZoom: zoom, maxZoom: maxZoom) },
+                    set: { setZoom(TimelineZoom.zoom(forSlider: $0, maxZoom: maxZoom)) }
+                ),
+                in: 0...1
+            ) {
                 Text("Zoom")
             }
             .labelsHidden()
             .frame(maxWidth: 240)
+            .accessibilityIdentifier("zoomSlider")
             Image(systemName: "plus.magnifyingglass")
             Button("Fit") { setZoom(1) }
                 .controlSize(.small)
+                .accessibilityIdentifier("zoomFitButton")
             Spacer()
             if model.isAnalyzing {
                 ProgressView()
@@ -135,13 +170,47 @@ struct WaveformTimelineView: View {
 
     /// Changes zoom while keeping the playhead at the same on-screen position.
     private func setZoom(_ newZoom: Double) {
-        let clamped = min(Self.zoomRange.upperBound, max(Self.zoomRange.lowerBound, newZoom))
+        guard visibleWidth > 0 else { return }
+        let clamped = TimelineZoom.clamp(newZoom, duration: durationSeconds, visibleWidth: visibleWidth)
         guard clamped != zoom else { return }
-        let playhead = model.currentTime.seconds.isFinite ? model.currentTime.seconds : 0
-        let screenX = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - scrollOffset
+        let playhead = model.currentTime.seconds
+        let oldScale = pixelsPerSecond(visible: visibleWidth)
+        let oldOffset = scrollOffset
+        suppressScrollTracking()
         zoom = clamped
-        let newOffset = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - screenX
-        scrollPosition.scrollTo(x: max(0, newOffset))
+        let newOffset = TimelineZoom.anchoredOffset(
+            anchorSeconds: playhead,
+            oldPixelsPerSecond: oldScale,
+            newPixelsPerSecond: pixelsPerSecond(visible: visibleWidth),
+            oldOffset: oldOffset,
+            newContentWidth: contentWidth(visible: visibleWidth),
+            visibleWidth: visibleWidth
+        )
+        // Scroll after the new content width is laid out, never into the old one.
+        DispatchQueue.main.async { scroll(to: newOffset) }
+    }
+
+    private func scroll(to x: CGFloat) {
+        guard x.isFinite else { return }
+        let target = x.rounded()
+        guard abs(target - scrollOffset) >= 1 else { return }
+        suppressScrollTracking()
+        scrollPosition.scrollTo(x: max(0, target))
+    }
+
+    private func suppressScrollTracking() {
+        ignoreScrollChangesUntil = Date.now.addingTimeInterval(0.3)
+    }
+
+    /// Brings the playhead into view if it's off screen (used when playback starts).
+    private func revealPlayhead() {
+        let seconds = model.currentTime.seconds
+        guard visibleWidth > 0, seconds.isFinite else { return }
+        let scale = pixelsPerSecond(visible: visibleWidth)
+        let x = CGFloat(seconds) * scale - scrollOffset
+        if x < 0 || x > visibleWidth {
+            scroll(to: PlayheadOverlay.pageOffset(for: seconds, pixelsPerSecond: scale, viewportWidth: visibleWidth, contentWidth: contentWidth(visible: visibleWidth)))
+        }
     }
 }
 
@@ -152,7 +221,8 @@ private struct PlayheadOverlay: View {
     let offset: CGFloat
     let viewportWidth: CGFloat
     let pixelsPerSecond: CGFloat
-    @Binding var scrollPosition: ScrollPosition
+    let followsPlayhead: Bool
+    let scrollTo: (CGFloat) -> Void
 
     var body: some View {
         #if DEBUG
@@ -165,19 +235,27 @@ private struct PlayheadOverlay: View {
             .shadow(color: .black.opacity(0.4), radius: 1)
             .frame(width: 2)
             .padding(.top, WaveformCanvas.rulerHeight)
-            .offset(x: x - 1)
+            .offset(x: x.isFinite ? x - 1 : 0)
             .opacity(x >= -1 && x <= viewportWidth + 1 ? 1 : 0)
             .onChange(of: model.currentTime) { _, time in
                 followPlayhead(time)
             }
     }
 
-    /// Pages the timeline when the playhead leaves the visible area during playback.
+    /// Offset that puts the playhead near the left edge of the viewport.
+    static func pageOffset(for seconds: Double, pixelsPerSecond: CGFloat, viewportWidth: CGFloat, contentWidth: CGFloat) -> CGFloat {
+        let target = CGFloat(seconds) * pixelsPerSecond - viewportWidth * 0.05
+        return min(max(0, contentWidth - viewportWidth), max(0, target))
+    }
+
+    /// Pages the timeline when the playhead leaves the visible area during
+    /// playback, unless the user has scrolled away by hand.
     private func followPlayhead(_ time: CMTime) {
-        guard model.isPlaying, viewportWidth > 0, time.seconds.isFinite else { return }
+        guard followsPlayhead, model.isPlaying, viewportWidth > 0, time.seconds.isFinite else { return }
         let x = CGFloat(time.seconds) * pixelsPerSecond - offset
         if x > viewportWidth * 0.95 || x < 0 {
-            scrollPosition.scrollTo(x: max(0, CGFloat(time.seconds) * pixelsPerSecond - viewportWidth * 0.05))
+            let contentWidth = pixelsPerSecond * CGFloat(TimelineZoom.safeDuration(model.timelineDuration.seconds))
+            scrollTo(Self.pageOffset(for: time.seconds, pixelsPerSecond: pixelsPerSecond, viewportWidth: viewportWidth, contentWidth: contentWidth))
         }
     }
 }

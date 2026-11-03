@@ -57,6 +57,7 @@ struct ContentView: View {
             }
         }
         .navigationTitle("HT Edit")
+        .playbackKeys(for: model)
         .dropDestination(for: URL.self) { urls, _ in
             model.add(urls: urls.filter(Self.isMediaFile))
         }
@@ -137,6 +138,17 @@ struct ContentView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
+            if model.playbackRate != 1 {
+                Text("\(model.playbackRate.formatted(.number.precision(.fractionLength(0...2))))×")
+                    .monospacedDigit()
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: .capsule)
+                    .help("Playback speed (J slower, L faster)")
+                    .accessibilityIdentifier("playbackRate")
+            }
+
             Spacer()
         }
     }
@@ -154,9 +166,9 @@ struct ContentView: View {
             Button(model.isPlaying ? "Pause" : "Play", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
                 model.togglePlayback()
             }
-            .keyboardShortcut(.space, modifiers: [])
+            // Space, J and L are handled app-wide by `playbackKeys(for:)`.
             .disabled(!model.hasMedia)
-            .help("Play / Pause (Space)")
+            .help("Play / Pause (Space) · Slower (J) · Faster (L)")
 
             Button("Inspector", systemImage: "sidebar.trailing") {
                 isInspectorPresented.toggle()

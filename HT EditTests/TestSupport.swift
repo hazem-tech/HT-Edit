@@ -8,6 +8,20 @@ import Foundation
 import Testing
 @testable import HT_Edit
 
+/// The transcription model IDs the tests expect, cheapest first. A catalog
+/// change in `TranscriptionModel` is a single edit here.
+nonisolated enum ExpectedCatalog {
+    static let low = "gemini-3.8-flash-low"
+    static let medium = "gemini-3.8-flash-medium"
+    static let high = "gemini-3.8-flash-high"
+    static let ids = [low, medium, high]
+
+    /// The catalog entry for `id`; fails the test (instead of crashing) if it's missing.
+    static func model(_ id: String, sourceLocation: SourceLocation = #_sourceLocation) throws -> TranscriptionModel {
+        try #require(TranscriptionModel.catalog.first { $0.id == id }, "\(id) is not in the catalog", sourceLocation: sourceLocation)
+    }
+}
+
 /// Builds `AudioLevels` from per-window dB values: 1 kHz, 10 frames per window (10 ms).
 func makeLevels(_ decibels: [Float], complete: Bool = true, frameCount: Int? = nil) -> AudioLevels {
     var levels = AudioLevels.empty

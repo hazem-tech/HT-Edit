@@ -24,12 +24,22 @@ struct WaveformCanvas: View {
     static let floorDB = Float(SilenceSettings.thresholdRange.lowerBound)
     static let rulerHeight: CGFloat = 18
     private static let barStep: CGFloat = 2
-    private static let barWidth: CGFloat = 1.5
+    /// Bars touch (no gap); each one has softly rounded ends.
+    private static let barWidth: CGFloat = 2
+    private static let barCornerRadius: CGFloat = 1
+    /// Neutral surface colour for the waveform (not the accent colour).
+    private static let waveColor = Color(nsColor: .secondaryLabelColor)
+    /// Silent parts look disabled: barely-there white and much dimmer bars.
+    private static let silenceWash = Color.white.opacity(0.05)
+    private static let silenceEdge = Color.white.opacity(0.2)
+    private static let silentBarOpacity = 0.25
     private static let tickSteps: [Double] = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800]
 
     var body: some View {
         Canvas { context, size in
-            guard pixelsPerSecond > 0, size.width > 0 else { return }
+            guard pixelsPerSecond.isFinite, pixelsPerSecond > 0, offset.isFinite,
+                  size.width.isFinite, size.height.isFinite, size.width > 0, size.height > Self.rulerHeight
+            else { return }
             let visibleStart = Double(offset / pixelsPerSecond)
             let visibleEnd = visibleStart + Double(size.width / pixelsPerSecond)
             let wave = CGRect(x: 0, y: Self.rulerHeight, width: size.width, height: size.height - Self.rulerHeight)
@@ -63,8 +73,8 @@ struct WaveformCanvas: View {
             fill.addRect(rect)
             edges.addRect(CGRect(x: rect.minX, y: wave.minY, width: rect.width, height: 3))
         }
-        context.fill(fill, with: .color(.red.opacity(0.22)))
-        context.fill(edges, with: .color(.red.opacity(0.8)))
+        context.fill(fill, with: .color(Self.silenceWash))
+        context.fill(edges, with: .color(Self.silenceEdge))
     }
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for
@@ -74,8 +84,9 @@ struct WaveformCanvas: View {
         guard levels.windowCount > 0 else { return }
         let laneMinX = max(0, xPosition(for: lane.start, visibleStart: visibleStart))
         let laneMaxX = min(wave.width, xPosition(for: lane.start + lane.duration, visibleStart: visibleStart))
-        guard laneMaxX > laneMinX else { return }
+        guard laneMinX.isFinite, laneMaxX.isFinite, laneMaxX > laneMinX else { return }
 
+        // Both are within 0...wave.width, so the Int conversions can't trap.
         let firstColumn = Int((laneMinX / Self.barStep).rounded(.down))
         let lastColumn = Int((laneMaxX / Self.barStep).rounded(.up))
         let columns = lastColumn - firstColumn
@@ -91,22 +102,44 @@ struct WaveformCanvas: View {
 
         let midY = wave.midY
         let halfHeight = wave.height / 2 - 2
+        let radius = CGSize(width: Self.barCornerRadius, height: Self.barCornerRadius)
+        // Bars inside silences go into separate, dimmer paths.
         var peakPath = Path()
         var rmsPath = Path()
+        var silentPeakPath = Path()
+        var silentRMSPath = Path()
+        var silenceIndex = silences.startIndex
         for column in 0..<columns {
             let x = CGFloat(firstColumn + column) * Self.barStep
             guard x >= laneMinX - Self.barStep, x < laneMaxX else { continue }
+            let center = visibleStart + Double((x + Self.barWidth / 2) / pixelsPerSecond)
+            while silenceIndex < silences.endIndex, silences[silenceIndex].end.seconds <= center {
+                silenceIndex += 1
+            }
+            let isSilent = silenceIndex < silences.endIndex && silences[silenceIndex].start.seconds <= center
             let peakHeight = CGFloat(WaveformSampler.normalized(peaks[column], floorDB: Self.floorDB)) * halfHeight
             let rmsHeight = CGFloat(WaveformSampler.normalized(rms[column], floorDB: Self.floorDB)) * halfHeight
             if peakHeight > 0 {
-                peakPath.addRect(CGRect(x: x, y: midY - peakHeight, width: Self.barWidth, height: peakHeight * 2))
+                let rect = CGRect(x: x, y: midY - peakHeight, width: Self.barWidth, height: peakHeight * 2)
+                if isSilent {
+                    silentPeakPath.addRoundedRect(in: rect, cornerSize: radius)
+                } else {
+                    peakPath.addRoundedRect(in: rect, cornerSize: radius)
+                }
             }
             if rmsHeight > 0 {
-                rmsPath.addRect(CGRect(x: x, y: midY - rmsHeight, width: Self.barWidth, height: rmsHeight * 2))
+                let rect = CGRect(x: x, y: midY - rmsHeight, width: Self.barWidth, height: rmsHeight * 2)
+                if isSilent {
+                    silentRMSPath.addRoundedRect(in: rect, cornerSize: radius)
+                } else {
+                    rmsPath.addRoundedRect(in: rect, cornerSize: radius)
+                }
             }
         }
-        context.fill(peakPath, with: .color(.accentColor.opacity(0.35)))
-        context.fill(rmsPath, with: .color(.accentColor))
+        context.fill(peakPath, with: .color(Self.waveColor.opacity(0.35)))
+        context.fill(rmsPath, with: .color(Self.waveColor))
+        context.fill(silentPeakPath, with: .color(Self.waveColor.opacity(0.35 * Self.silentBarOpacity)))
+        context.fill(silentRMSPath, with: .color(Self.waveColor.opacity(Self.silentBarOpacity)))
     }
 
     /// The threshold drawn on the same dB scale as the waveform, so users can see

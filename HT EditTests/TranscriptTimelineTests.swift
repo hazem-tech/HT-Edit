@@ -114,21 +114,23 @@ struct TranscriptTimelineTests {
         #expect(controller.context.isEmpty)
         #expect(Set(TranscriptionModel.catalog.map(\.id)).count == TranscriptionModel.catalog.count)
         #expect(TranscriptionModel.catalog.allSatisfy { $0.id.hasPrefix("gemini-") })
+        #expect(TranscriptionModel.catalog.map(\.id) == ExpectedCatalog.ids)
     }
 
     @Test func availableModelsComeFromTheAgyListCheapestFirst() {
         let list = """
         Available models:
           claude-sonnet-5-5        Claude Sonnet
-          gemini-3.6-flash         Gemini 3.6 Flash (default)
-          gemini-3.5-flash-lite    Gemini 3.5 Flash-Lite
+          gemini-3.8-flash-high    Gemini 3.8 Flash High (default)
+          gemini-3.8-flash-low     Gemini 3.8 Flash Low
+          gemini-3.8-flash-lowest  Not a catalog model
         """
-        // Claude can't hear audio, and "gemini-3.5-flash" only appears as part of "-lite".
-        #expect(TranscriptionModel.available(inModelList: list).map(\.id) == ["gemini-3.5-flash-lite", "gemini-3.6-flash"])
+        // Claude can't hear audio, and "-lowest" is a longer name, not "-low".
+        #expect(TranscriptionModel.available(inModelList: list).map(\.id) == [ExpectedCatalog.low, ExpectedCatalog.high])
     }
 
     @Test func availableModelsMatchDisplayNamesAndPreviewSlugs() {
-        #expect(TranscriptionModel.available(inModelList: "Gemini 3.1 Pro\ngemini-3.6-flash-preview").map(\.id) == ["gemini-3.6-flash", "gemini-3.1-pro"])
+        #expect(TranscriptionModel.available(inModelList: "Gemini 3.8 Flash (Medium)\ngemini-3.8-flash-high-preview").map(\.id) == [ExpectedCatalog.medium, ExpectedCatalog.high])
         #expect(TranscriptionModel.available(inModelList: "gpt-oss-120b").isEmpty)
     }
 }

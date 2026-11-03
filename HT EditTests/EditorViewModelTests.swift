@@ -21,6 +21,48 @@ struct EditorViewModelTests {
         )
     }
 
+    // MARK: Playback speed
+
+    @Test func playbackRatesStepAndClampAtBothEnds() {
+        #expect(EditorViewModel.playbackRates == [0.5, 1, 1.25, 1.5, 2, 2.5])
+        #expect(EditorViewModel.rate(1, steppedBy: 1) == 1.25)
+        #expect(EditorViewModel.rate(1, steppedBy: -1) == 0.5)
+        #expect(EditorViewModel.rate(0.5, steppedBy: -1) == 0.5)
+        #expect(EditorViewModel.rate(2.5, steppedBy: 1) == 2.5)
+        #expect(EditorViewModel.rate(2, steppedBy: 1) == 2.5)
+        #expect(EditorViewModel.rate(1.3, steppedBy: 1) == 1.5, "an off-list rate snaps to the nearest step first")
+    }
+
+    @Test func settingTheRateAppliesToThePlayer() {
+        let model = makeModel()
+        #expect(model.playbackRate == 1)
+        model.setPlaybackRate(1.5)
+        #expect(model.playbackRate == 1.5)
+        #expect(model.player.defaultRate == 1.5)
+    }
+
+    @Test func stepWhilePausedStartsPlaybackWithoutChangingSpeed() {
+        let model = makeModel()
+        model.player.pause()
+        model.stepPlaybackRate(by: 1)
+        #expect(model.playbackRate == 1)
+        model.player.pause()
+        model.stepPlaybackRate(by: -1)
+        #expect(model.playbackRate == 1)
+        model.player.pause()
+    }
+
+    @Test func transportKeysAreSpaceJAndLWithoutModifiers() {
+        #expect(PlaybackKey(characters: " ", modifiers: []) == .playPause)
+        #expect(PlaybackKey(characters: "j", modifiers: []) == .slower)
+        #expect(PlaybackKey(characters: "l", modifiers: []) == .faster)
+        #expect(PlaybackKey(characters: "l", modifiers: [.capsLock]) == .faster)
+        #expect(PlaybackKey(characters: "l", modifiers: [.command]) == nil)
+        #expect(PlaybackKey(characters: " ", modifiers: [.shift]) == nil)
+        #expect(PlaybackKey(characters: "k", modifiers: []) == nil)
+        #expect(PlaybackKey(characters: nil, modifiers: []) == nil)
+    }
+
     @Test func clipsFormOneSeamlessTimeline() {
         let model = makeModel()
         #expect(isClose(model.timelineDuration.seconds, 5))

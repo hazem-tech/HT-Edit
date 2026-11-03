@@ -38,6 +38,8 @@ final class EditorViewModel {
     private(set) var currentTime: CMTime = .zero
     private(set) var silences: [CMTimeRange] = []
     private(set) var playbackStatus: PlaybackStatus = .idle
+    /// Speed used whenever playback runs (J slower, L faster).
+    private(set) var playbackRate: Float = 1
     /// Bumped whenever stored levels change, so views depending on them refresh.
     private(set) var levelsRevision = 0
     var errorMessage: String?
@@ -253,6 +255,37 @@ final class EditorViewModel {
     }
 
     // MARK: Transport
+
+    /// Speeds J and L step through, slowest first.
+    static let playbackRates: [Float] = [0.5, 1, 1.25, 1.5, 2, 2.5]
+
+    /// The rate `steps` places away from `rate` in `playbackRates`, clamped to the ends.
+    static func rate(_ rate: Float, steppedBy steps: Int) -> Float {
+        let rates = playbackRates
+        let current = rates.firstIndex(of: rate)
+            ?? rates.indices.min { abs(rates[$0] - rate) < abs(rates[$1] - rate) }
+            ?? 1
+        return rates[min(rates.count - 1, max(0, current + steps))]
+    }
+
+    /// J (`-1`) / L (`+1`): starts playback at the current speed if paused,
+    /// otherwise makes it one step slower or faster.
+    func stepPlaybackRate(by steps: Int) {
+        guard hasMedia else { return }
+        guard isPlaying else {
+            togglePlayback()
+            return
+        }
+        setPlaybackRate(Self.rate(playbackRate, steppedBy: steps))
+    }
+
+    func setPlaybackRate(_ rate: Float) {
+        playbackRate = rate
+        // `play()` uses `defaultRate`, so pausing, resuming and rebuilding the
+        // composition all keep this speed.
+        player.defaultRate = rate
+        if isPlaying { player.rate = rate }
+    }
 
     func togglePlayback() {
         guard hasMedia else { return }

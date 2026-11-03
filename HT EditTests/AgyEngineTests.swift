@@ -116,14 +116,12 @@ struct AgyEngineProcessTests {
     @Test func statusListsOnlyCatalogModelsFromAgyModels() async throws {
         let fake = try FakeAgy(#"""
         [ "$1" = "models" ] || exit 2
-        printf 'claude-sonnet-5-5\ngemini-3.6-flash\ngemini-3.5-flash-lite\n'
+        printf 'claude-sonnet-5-5\ngemini-3.8-flash-high\ngemini-3.8-flash-low\n'
         """#)
         defer { fake.remove() }
+        let expected = [try ExpectedCatalog.model(ExpectedCatalog.low), try ExpectedCatalog.model(ExpectedCatalog.high)]
         let status = await AgyEngine(executable: fake.url).checkStatus()
-        #expect(status == .ready([
-            TranscriptionModel.catalog.first { $0.id == "gemini-3.5-flash-lite" }!,
-            TranscriptionModel.catalog.first { $0.id == "gemini-3.6-flash" }!,
-        ]))
+        #expect(status == .ready(expected))
     }
 
     @Test func signedOutAgyIsReportedAsNotSignedIn() async throws {
