@@ -18,11 +18,9 @@ nonisolated struct TranscriptionModel: Identifiable, Hashable, Sendable {
     /// audio; they are deliberately left out. The picker narrows this list to
     /// what `agy models` reports for the signed-in account.
     static let catalog: [TranscriptionModel] = [
-        TranscriptionModel(id: "gemini-3.1-flash-lite", displayName: "Gemini 3.1 Flash-Lite"),
-        TranscriptionModel(id: "gemini-3.5-flash-lite", displayName: "Gemini 3.5 Flash-Lite"),
-        TranscriptionModel(id: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash"),
-        TranscriptionModel(id: "gemini-3.6-flash", displayName: "Gemini 3.6 Flash"),
-        TranscriptionModel(id: "gemini-3.1-pro", displayName: "Gemini 3.1 Pro"),
+        TranscriptionModel(id: "gemini-3.8-flash-low", displayName: "Gemini 3.8 Flash (Low)"),
+        TranscriptionModel(id: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)"),
+        TranscriptionModel(id: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash (High)")
     ]
 
     /// The catalog entries that appear in `agy models` output, cheapest first.
