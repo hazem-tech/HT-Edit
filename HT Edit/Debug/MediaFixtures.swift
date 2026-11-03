@@ -4,7 +4,7 @@
 //
 //  Debug-only generator of real media files for end-to-end tests: unit tests
 //  use it through `@testable import`, and UI tests ask the app to generate one
-//  inside its own sandbox via the `-UITestFixture` launch argument.
+//  itself via the `-UITestFixture` launch argument.
 //
 
 #if DEBUG

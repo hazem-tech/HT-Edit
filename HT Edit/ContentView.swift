@@ -36,8 +36,8 @@ struct ContentView: View {
                 }
             }
             .inspector(isPresented: inspectorBinding) {
-                SilenceSettingsPanel(model: model)
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+                InspectorView(model: model)
+                    .inspectorColumnWidth(min: 280, ideal: 320, max: 460)
             }
             .toolbar { toolbar }
             .fileImporter(
@@ -162,7 +162,7 @@ struct ContentView: View {
                 isInspectorPresented.toggle()
             }
             .disabled(!model.hasMedia)
-            .help("Show or hide silence settings")
+            .help("Show or hide silence settings and the transcript")
         }
     }
 
