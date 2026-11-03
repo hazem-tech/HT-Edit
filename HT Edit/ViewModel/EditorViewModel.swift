@@ -32,6 +32,8 @@ final class EditorViewModel {
     // MARK: State
 
     let player: AVPlayer
+    /// Transcripts of the clips on the timeline.
+    let transcription: TranscriptionController
     private(set) var clips: [Clip] = []
     private(set) var currentTime: CMTime = .zero
     private(set) var silences: [CMTimeRange] = []
@@ -54,7 +56,11 @@ final class EditorViewModel {
 
     var isPlaying: Bool { player.timeControlStatus != .paused }
 
-    private var placedClips: [Clip] { clips.filter(\.isPlaced) }
+    /// Clips on the timeline, in order (clips whose duration is still loading aren't placed yet).
+    var placedClips: [Clip] { clips.filter(\.isPlaced) }
+
+    /// Transcript lines at their timeline positions.
+    var timelineTranscript: [TimelineSegment] { transcription.timelineSegments(for: placedClips) }
 
     var timelineDuration: CMTime {
         placedClips.reduce(.zero) { $0 + $1.duration }
@@ -104,15 +110,21 @@ final class EditorViewModel {
     private static let levelsPublishInterval: Duration = .milliseconds(50)
     private static let playerReadyTimeout: Duration = .seconds(15)
 
-    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer()) {
+    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(), transcription: TranscriptionController = .live()) {
         self.analyzer = analyzer
+        self.transcription = transcription
         self.player = AVPlayer()
         configurePlayer()
     }
 
     /// Creates a model with pre-analyzed clips (used by tests and previews).
-    init(analyzedClips: [(clip: Clip, levels: AudioLevels)], settings: SilenceSettings = .default) {
+    init(
+        analyzedClips: [(clip: Clip, levels: AudioLevels)],
+        settings: SilenceSettings = .default,
+        transcription: TranscriptionController = TranscriptionController(engine: AgyEngine(), cache: nil, defaults: nil)
+    ) {
         self.analyzer = AudioLevelAnalyzer(cache: nil)
+        self.transcription = transcription
         self.player = AVPlayer()
         self.clips = analyzedClips.map { entry in
             var clip = entry.clip
@@ -160,10 +172,12 @@ final class EditorViewModel {
             }
         }
         clips.removeAll { ids.contains($0.id) }
+        transcription.remove(ids)
         levelsRevision += 1
         recomputeSilences()
 
         if clips.isEmpty {
+            transcription.cancel()
             compositionTask?.cancel()
             compositionGeneration += 1
             player.pause()

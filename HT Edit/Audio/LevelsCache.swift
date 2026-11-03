@@ -3,7 +3,6 @@
 //  HT Edit
 //
 
-import CryptoKit
 import Foundation
 
 /// On-disk cache of finished audio analyses ("peak files"), so a file that was
@@ -30,15 +29,7 @@ actor LevelsCache {
 
     /// Cache key for the file at `url`, or `nil` if its attributes can't be read.
     nonisolated static func key(for url: URL, windowDuration: Double) -> String? {
-        // `URL` caches resource values; read fresh ones so an edited file gets a new key.
-        var url = url
-        url.removeAllCachedResourceValues()
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-              let size = values.fileSize else { return nil }
-        let modified = values.contentModificationDate?.timeIntervalSinceReferenceDate ?? 0
-        let identity = "\(url.standardizedFileURL.path)|\(size)|\(modified)|\(windowDuration)|\(formatVersion)"
-        let digest = SHA256.hash(data: Data(identity.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        FileCacheKey.key(for: url, salt: "\(windowDuration)|\(formatVersion)")
     }
 
     func load(key: String) -> AudioLevels? {

@@ -52,9 +52,9 @@ final class HT_EditUITests: XCTestCase {
 
     /// Imports a generated video (green frames, tone/silence/tone) via the debug hook.
     @MainActor
-    private func launchWithFixture(_ kinds: String...) -> XCUIApplication {
+    private func launchWithFixture(_ kinds: String..., extraArguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITestFixture", kinds.joined(separator: ",")]
+        app.launchArguments = ["-UITestFixture", kinds.joined(separator: ",")] + extraArguments
         app.launch()
         return app
     }
@@ -124,6 +124,38 @@ final class HT_EditUITests: XCTestCase {
         app.typeKey(.delete, modifierFlags: [])
 
         expect(app.buttons["importButton"].waitForExistence(timeout: 5), "Deleting the only clip should return to the empty state", app)
+    }
+
+    // MARK: Transcript
+
+    /// With the fake transcriber (no Google sign-in needed): the Transcript tab
+    /// offers the cheapest model and an empty context, and Transcribe fills in rows.
+    @MainActor
+    func testTranscribeFillsInTimestampedRows() throws {
+        let app = launchWithFixture("h264Landscape", extraArguments: ["-UITestFakeTranscription", "1"])
+        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
+        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+
+        let tab = [app.radioButtons["Transcript"], app.buttons["Transcript"]].first { $0.waitForExistence(timeout: 2) }
+        expect(tab != nil, "Transcript tab not found", app)
+        tab?.click()
+
+        let picker = app.descendants(matching: .any).matching(identifier: "transcriptModelPicker").firstMatch
+        expect(picker.waitForExistence(timeout: 5), "Model picker not found", app)
+        let pickerValue = (picker.value as? String) ?? picker.label
+        expect(pickerValue.contains("(cheapest)"), "Picker should default to the cheapest model, shows \(pickerValue)", app)
+
+        let context = app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch
+        expect(context.waitForExistence(timeout: 5), "Context field not found", app)
+        expect(((context.value as? String) ?? "").isEmpty, "Context should be empty by default", app)
+
+        let transcribe = app.buttons["transcribeButton"]
+        expect(transcribe.waitForExistence(timeout: 5) && transcribe.isEnabled, "Transcribe button not ready", app)
+        transcribe.click()
+
+        let line = app.descendants(matching: .any).matching(identifier: "transcriptRow").firstMatch
+        expect(line.waitForExistence(timeout: 20), "No transcript rows after transcribing", app)
+        add(XCTAttachment(screenshot: app.screenshot()))
     }
 
     // MARK: Helpers

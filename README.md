@@ -22,6 +22,29 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
+- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+
+## Transcription
+
+Transcription runs through your own **Antigravity CLI (`agy`)**, under your Google account and subscription. There are no API keys, and nothing is charged per request. (Gemini CLI no longer serves individual accounts; Antigravity CLI replaced it.)
+
+**One-time setup:** install the Antigravity CLI and sign in once with your Google account (run `agy` in Terminal). That's all.
+
+**Every time:** everything happens in HT Edit.
+1. Open the **Transcript** tab and press **Transcribe**.
+2. Optional: pick another **model**. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered.
+3. Optional: type **context**, such as names, jargon or spellings. It's empty by default.
+
+How it works:
+- Each clip's audio is cut into 3-minute chunks (`.m4a`).
+- HT Edit runs `agy -p … --output-format json --json-schema …` on two chunks at a time.
+- The timestamped segments are placed on the timeline as they arrive.
+- A failed chunk is retried once; anything that still fails can be retried on its own.
+- Finished transcripts are cached per file, model and context.
+
+To check your installation by hand, run `zsh scripts/agy-probe.sh`. It runs the exact command HT Edit uses on a short clip with speech.
+
+Running `agy` and reading your sign-in means HT Edit runs **without the App Sandbox**. Distribute it signed and notarized, outside the Mac App Store. Hardened runtime stays on.
 
 ## Speed
 
@@ -39,7 +62,8 @@ The clips are test videos the app generates itself: solid green frames, with a t
 | Detection | `Analysis/SilenceDetector.swift`, `Model/ClipTimeline.swift` |
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
-| UI | `ContentView.swift`, `Views/*`, `App/WarmUp.swift` |
+| Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
+| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
 
@@ -54,7 +78,8 @@ Open `HT Edit.xcodeproj` in Xcode, then:
 Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 27, Xcode 27):
 - The build treats **all warnings as errors**, so deprecated APIs and concurrency warnings fail CI.
 - Unit tests include end-to-end imports of generated H.264, HEVC, portrait and audio-only files. They check that playback becomes ready, that frames are not black, that analysis finishes, and that silences are found.
-- UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which imports a generated file inside the app's sandbox. They check the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, and the **+** and Import buttons.
+- Transcription tests run the real `agy` runner against fake `agy` scripts: success, signed out, errors, hangs, cancellation and large output. They also cover the chunking, the limit of two requests at a time, the retry and the cache, using real exported audio. CI has no Google sign-in, so a real transcription is checked by hand with `scripts/agy-probe.sh`.
+- UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which makes the app generate and import a file. They check the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, and the **+** and Import buttons. With `-UITestFakeTranscription 1`, a built-in fake stands in for Antigravity, and the Transcript tab is tested end to end.
 
 ### Diagnostics
 
