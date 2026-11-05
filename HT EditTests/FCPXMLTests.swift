@@ -25,7 +25,6 @@ struct FCPXMLTests {
     }
 
     private let basicTitle = TitleTemplates.resolve("Basic Title", installed: [])
-    private let adjustment = TitleTemplate(name: "Adjustment Layer", uid: "~/Titles.localized/Adjustment Layer/Adjustment Layer.moti", source: .installed)
 
     // MARK: Frame rates
 
@@ -64,81 +63,65 @@ struct FCPXMLTests {
         #expect(FCPXML.wordGroups([FCPXML.Caption(start: 0, end: 1, text: "   ")], wordsPerTitle: 3).isEmpty)
     }
 
-    // MARK: Cutting silences
+    // MARK: Timeline
 
-    @Test func silencesAreCutOut() {
-        let pieces = FCPXML.pieces(media: [media("a", duration: 10)], silences: [2..<4], rate: .fps30)
-        #expect(pieces.map(\.sourceStart) == [0, 120])
-        #expect(pieces.map(\.duration) == [60, 180])
-        #expect(pieces.map(\.offset) == [0, 60])
+    @Test func clipsAreBackToBack() {
+        let pieces = FCPXML.pieces(media: [media("a", duration: 5), media("b", duration: 2.5)], rate: .fps30)
+        #expect(pieces.map(\.offset) == [0, 150])
+        #expect(pieces.map(\.duration) == [150, 75])
+        #expect(FCPXML.exportedFrame(for: 6, in: pieces, rate: .fps30) == 180)
+        #expect(FCPXML.exportedFrame(for: 99, in: pieces, rate: .fps30) == 225)
     }
 
-    @Test func clipsAreBackToBackAndSilencesAcrossTheBoundarySplitBoth() {
-        let pieces = FCPXML.pieces(media: [media("a", duration: 5), media("b", duration: 5)], silences: [4..<6], rate: .fps30)
-        #expect(pieces.map(\.mediaIndex) == [0, 1])
-        #expect(pieces.map(\.sourceStart) == [0, 30])
-        #expect(pieces.map(\.duration) == [120, 120])
-        #expect(pieces.map(\.offset) == [0, 120])
-    }
-
-    @Test func timesInsideACutLandWhereTheNextPieceStarts() {
-        let pieces = FCPXML.pieces(media: [media("a", duration: 10)], silences: [2..<4], rate: .fps30)
-        #expect(FCPXML.exportedFrame(for: 1, in: pieces, rate: .fps30) == 30)
-        #expect(FCPXML.exportedFrame(for: 3, in: pieces, rate: .fps30) == 60)
-        #expect(FCPXML.exportedFrame(for: 5, in: pieces, rate: .fps30) == 90)
-        #expect(FCPXML.exportedFrame(for: 99, in: pieces, rate: .fps30) == 240)
-    }
-
-    @Test func captionsInsideACutAreDropped() {
+    @Test func overlappingCaptionsAreTrimmed() {
         let input = FCPXML.Input(
             projectName: "p",
             media: [media("a", duration: 10)],
-            silences: [2..<4],
             transcript: [
-                FCPXML.Caption(start: 0, end: 1, text: "hello there you"),
-                FCPXML.Caption(start: 2.5, end: 3.5, text: "lost in silence"),
-                FCPXML.Caption(start: 5, end: 6, text: "after the cut"),
+                FCPXML.Caption(start: 0, end: 2, text: "hello there you"),
+                FCPXML.Caption(start: 1, end: 3, text: "next line here"),
             ],
             captionTitle: basicTitle
         )
-        let pieces = FCPXML.pieces(media: input.media, silences: input.silences, rate: .fps30)
+        let pieces = FCPXML.pieces(media: input.media, rate: .fps30)
         let placed = FCPXML.placedCaptions(input, pieces: pieces, rate: .fps30)
-        #expect(placed.map(\.text) == ["hello there you", "after the cut"])
-        #expect(placed.map(\.offset) == [0, 90])
-        #expect(placed.map(\.duration) == [30, 30])
+        #expect(placed.map(\.offset) == [0, 30])
+        #expect(placed.map(\.duration) == [30, 60])
     }
 
     // MARK: Document
 
-    @Test func documentHasTitlesAndAnAdjustmentLayerOverTheWholeVideo() {
+    @Test func adjustmentClipSitsBetweenVideoAndCenteredTitles() {
         let input = FCPXML.Input(
             projectName: "Talk & <Demo>",
             media: [media("a", duration: 10), media("b", duration: 5)],
-            silences: [2..<4],
             transcript: [FCPXML.Caption(start: 0, end: 1.5, text: "one two three four five six")],
-            captionTitle: basicTitle,
-            adjustmentLayer: adjustment
+            captionTitle: basicTitle
         )
         let xml = FCPXML.document(input)
 
         #expect(xml.hasPrefix("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>"))
-        #expect(xml.contains("<fcpxml version=\"\(FCPXML.version)\">"))
+        #expect(xml.contains("<fcpxml version=\"1.14\">"))
         #expect(xml.contains("name=\"Talk &amp; &lt;Demo&gt;\""))
+        #expect(xml.components(separatedBy: "<asset-clip ").count - 1 == 2)
+        // Native adjustment clip on lane 1, covering all 15 s (450 frames).
+        #expect(xml.contains("name=\"Adjustment Clip\" uid=\"FFAdjustmentEffect\""))
+        #expect(xml.contains("<sequence format=\"r1\" duration=\"45000/3000s\""))
+        #expect(xml.contains("lane=\"1\" offset=\"0s\" name=\"Adjustment Clip\" start=\"0s\" duration=\"45000/3000s\" role=\"adjustments\""))
+        // Titles on lane 2, 3 words each, centered.
+        #expect(xml.components(separatedBy: "<title ref=").count - 1 == 2)
+        #expect(xml.components(separatedBy: "lane=\"2\"").count - 1 == 2)
         #expect(xml.contains("<text-style ref=\"ts1\">one two three</text-style>"))
         #expect(xml.contains("<text-style ref=\"ts2\">four five six</text-style>"))
-        #expect(xml.components(separatedBy: "<asset-clip ").count - 1 == 3)
-        // 13 s kept at 30 fps = 390 frames: sequence and adjustment layer match.
-        #expect(xml.contains("<sequence format=\"r1\" duration=\"39000/3000s\""))
-        #expect(xml.contains("lane=\"2\" offset=\"0s\" name=\"Adjustment Layer\" duration=\"39000/3000s\""))
-        #expect(xml.contains(adjustment.uid))
+        #expect(xml.contains("<text-style alignment=\"center\"/>"))
         #expect(xml.contains(basicTitle.uid))
     }
 
-    @Test func adjustmentLayerUsesLaneOneWithoutCaptions() {
-        let input = FCPXML.Input(projectName: "p", media: [media("a", duration: 2)], adjustmentLayer: adjustment)
-        let xml = FCPXML.document(input)
-        #expect(xml.contains("lane=\"1\" offset=\"0s\" name=\"Adjustment Layer\" duration=\"6000/3000s\""))
-        #expect(!xml.contains("<text>"))
+    @Test func withoutATranscriptOnlyTheAdjustmentClipIsAdded() {
+        let xml = FCPXML.document(FCPXML.Input(projectName: "p", media: [media("a", duration: 2)], captionTitle: basicTitle))
+        #expect(xml.contains("lane=\"1\" offset=\"0s\" name=\"Adjustment Clip\" start=\"0s\" duration=\"6000/3000s\""))
+        #expect(!xml.contains("<title "))
+        #expect(!xml.contains(basicTitle.uid))
     }
 
     // MARK: Title templates
@@ -150,17 +133,40 @@ struct FCPXMLTests {
         #expect(missing.uid == "~/Titles.localized/My Captions/My Captions.moti")
     }
 
-    @Test func installedTitlesAreFoundByName() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "titles-\(UUID().uuidString)")
+    @Test func installedTitlesAreFoundByNameOrPath() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "templates-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let folder = root.appending(path: "Effects/Adjustment Layer")
+        let folder = root.appending(path: "Titles.localized/Captions/Pop Words")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data().write(to: folder.appending(path: "Adjustment Layer.moti"))
+        let file = folder.appending(path: "Pop Words.moti")
+        try Data().write(to: file)
 
         let installed = TitleTemplates.installed(in: root)
-        #expect(installed.map(\.name) == ["Adjustment Layer"])
-        let template = TitleTemplates.resolve("adjustment layer", installed: installed)
-        #expect(template.source == .installed)
-        #expect(template.uid == "~/Titles.localized/Effects/Adjustment Layer/Adjustment Layer.moti")
+        #expect(installed.map(\.name) == ["Pop Words"])
+
+        let byName = TitleTemplates.resolve("pop words", installed: installed, motionTemplates: root)
+        #expect(byName.source == .installed)
+        #expect(byName.uid == "~/Titles.localized/Captions/Pop Words/Pop Words.moti")
+
+        let byFile = TitleTemplates.resolve(file.path(percentEncoded: false), installed: [], motionTemplates: root)
+        #expect(byFile == byName)
+        let byFolder = TitleTemplates.resolve(folder.path(percentEncoded: false), installed: [], motionTemplates: root)
+        #expect(byFolder == byName)
+    }
+
+    @Test func titlesOutsideMotionTemplatesAreFlagged() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "loose-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appending(path: "Loose.moti")
+        try Data().write(to: file)
+
+        let template = TitleTemplates.resolve(file.path(percentEncoded: false), installed: [], motionTemplates: root.appending(path: "elsewhere"))
+        #expect(template.source == .outsideMotionTemplates)
+        #expect(template.name == "Loose")
+    }
+
+    @Test func emptyNameMeansBasicTitle() {
+        #expect(TitleTemplates.resolve("  ", installed: []).name == "Basic Title")
     }
 }

@@ -167,7 +167,7 @@ struct ContentView: View {
             }
             .keyboardShortcut("e")
             .disabled(model.placedClips.isEmpty)
-            .help("Open the timeline in Final Cut Pro, with captions and an adjustment layer (⌘E)")
+            .help("Open the timeline in Final Cut Pro (⌘E)")
             .accessibilityIdentifier("openInFinalCutButton")
 
             Button("Inspector", systemImage: "sidebar.trailing") {

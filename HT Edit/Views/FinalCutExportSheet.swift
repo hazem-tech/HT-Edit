@@ -6,173 +6,107 @@
 import os
 import SwiftUI
 
-/// Asks how to build the Final Cut Pro project, then opens it there.
-///
-/// Captions: the transcript, three words per title, using the title template
-/// the user types (Basic Title by default). An adjustment layer (a title
-/// template, e.g. a free "Adjustment Layer" title) sits above the captions for
-/// the whole length of the video.
+/// Asks which title to use for the captions, then opens the timeline in
+/// Final Cut Pro: the clips, Final Cut's adjustment clip over the whole video,
+/// and the transcript as centered titles of 3 words each on top.
 struct FinalCutExportSheet: View {
     @Bindable var model: EditorViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @AppStorage("finalCut.removeSilences") private var removeSilences = true
-    @AppStorage("finalCut.includeCaptions") private var includeCaptions = true
-    @AppStorage("finalCut.captionTitle") private var captionTitleName = TitleTemplates.defaultCaptionTitle
-    @AppStorage("finalCut.includeAdjustmentLayer") private var includeAdjustmentLayer = true
-    @AppStorage("finalCut.adjustmentLayer") private var adjustmentLayerName = TitleTemplates.defaultAdjustmentLayer
+    @AppStorage("finalCut.captionTitle") private var captionTitle = TitleTemplates.defaultCaptionTitle
 
     @State private var installed: [TitleTemplate] = []
+    @State private var isInfoPresented = false
     @State private var isExporting = false
     @State private var errorMessage: String?
 
-    private var hasTranscript: Bool { !model.timelineTranscript.isEmpty }
-
     var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    Toggle("Cut out silences", isOn: $removeSilences)
-                        .accessibilityIdentifier("finalCutRemoveSilences")
-                } header: {
-                    Text("Timeline")
-                } footer: {
-                    Text(removeSilences
-                         ? "\(model.silences.count) highlighted silence(s), \(TimeFormatting.string(model.totalSilenceDuration)) in all, are left out."
-                         : "Every clip is sent whole.")
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Open in Final Cut Pro")
+                .font(.headline)
 
-                Section {
-                    if hasTranscript {
-                        Toggle("Add the transcript as titles", isOn: $includeCaptions)
-                        if includeCaptions {
-                            templateField(
-                                "Title",
-                                text: $captionTitleName,
-                                defaultName: TitleTemplates.defaultCaptionTitle,
-                                identifier: "finalCutCaptionTitle"
-                            )
-                        }
-                    } else {
-                        Text("Transcribe first (Transcript tab) to add captions.")
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Captions")
-                } footer: {
-                    if hasTranscript && includeCaptions {
-                        Text("Each title shows 3 words. Type the name of a different title if you want one.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section {
-                    Toggle("Add an adjustment layer", isOn: $includeAdjustmentLayer)
-                    if includeAdjustmentLayer {
-                        templateField(
-                            "Name",
-                            text: $adjustmentLayerName,
-                            defaultName: TitleTemplates.defaultAdjustmentLayer,
-                            identifier: "finalCutAdjustmentLayer"
-                        )
-                    }
-                } header: {
-                    Text("Adjustment Layer")
-                } footer: {
-                    if includeAdjustmentLayer {
-                        Text("Placed above the captions, covering the entire video.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if let errorMessage {
-                    Section {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
-                            .textSelection(.enabled)
-                    }
-                }
+            HStack {
+                TextField("Title", text: $captionTitle, prompt: Text(TitleTemplates.defaultCaptionTitle))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(export)
+                    .accessibilityIdentifier("finalCutCaptionTitle")
+                Button("About the title", systemImage: "info.circle") { isInfoPresented.toggle() }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Type a title's name or its path")
+                    .popover(isPresented: $isInfoPresented, arrowEdge: .trailing) { info }
+                    .accessibilityIdentifier("finalCutTitleInfo")
             }
-            .formStyle(.grouped)
 
-            Divider()
+            status(TitleTemplates.resolve(captionTitle, installed: installed))
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+
             HStack {
                 if isExporting { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Open in Final Cut Pro") { export() }
+                Button("Open in Final Cut Pro", action: export)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(isExporting || model.placedClips.isEmpty)
                     .accessibilityIdentifier("finalCutOpenButton")
             }
-            .padding()
         }
-        .frame(width: 460)
-        .frame(minHeight: 420)
+        .padding(20)
+        .frame(width: 420)
         .task {
             installed = await Task.detached(priority: .userInitiated) { TitleTemplates.installed() }.value
         }
     }
 
-    @ViewBuilder
-    private func templateField(_ label: String, text: Binding<String>, defaultName: String, identifier: String) -> some View {
-        HStack {
-            TextField(label, text: text, prompt: Text(defaultName))
-                .accessibilityIdentifier(identifier)
-            Menu {
-                ForEach(installed + TitleTemplates.builtIn.values.sorted { $0.name < $1.name }, id: \.uid) { template in
-                    Button(template.name) { text.wrappedValue = template.name }
-                }
-            } label: {
-                Image(systemName: "list.bullet")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Choose an installed title")
+    private var info: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Caption title").font(.headline)
+            Text("Type the name of a title, such as Basic Title, or the path to its .moti file or folder. HT Edit finds it in Final Cut's titles and in ~/Movies/Motion Templates.")
+            Text("The transcript is split into titles of 3 words each, centered. An adjustment clip covers the whole video, between the video and the titles.")
+                .foregroundStyle(.secondary)
         }
-        templateStatus(TitleTemplates.resolve(name(text.wrappedValue, default: defaultName), installed: installed))
+        .font(.callout)
+        .frame(width: 280, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding()
     }
 
-    private func templateStatus(_ template: TitleTemplate) -> some View {
+    private func status(_ template: TitleTemplate) -> some View {
         Group {
             switch template.source {
             case .builtIn:
-                Label("Built into Final Cut Pro", systemImage: "checkmark.circle")
+                Label("“\(template.name)” is built into Final Cut Pro.", systemImage: "checkmark.circle")
             case .installed:
-                Label("Found in Motion Templates", systemImage: "checkmark.circle")
+                Label("Found “\(template.name)” in Motion Templates.", systemImage: "checkmark.circle")
+            case .outsideMotionTemplates:
+                Label("Final Cut only loads titles from ~/Movies/Motion Templates. Move “\(template.name)” there.", systemImage: "exclamationmark.triangle")
             case .notFound:
-                Label("“\(template.name)” isn't installed in ~/Movies/Motion Templates. Final Cut will show it as missing until you install it.", systemImage: "exclamationmark.triangle")
+                Label("Couldn't find “\(template.name)”. Final Cut will show it as missing.", systemImage: "exclamationmark.triangle")
             }
         }
         .font(.caption)
-        .foregroundStyle(template.source == .notFound ? Color.orange : Color.secondary)
-    }
-
-    private func name(_ typed: String, default defaultName: String) -> String {
-        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? defaultName : trimmed
+        .foregroundStyle(template.source == .builtIn || template.source == .installed ? Color.secondary : Color.orange)
+        .accessibilityIdentifier("finalCutTitleStatus")
     }
 
     private func export() {
-        let options = FinalCutExportOptions(
-            removeSilences: removeSilences,
-            includeCaptions: includeCaptions,
-            captionTitleName: name(captionTitleName, default: TitleTemplates.defaultCaptionTitle),
-            includeAdjustmentLayer: includeAdjustmentLayer,
-            adjustmentLayerName: name(adjustmentLayerName, default: TitleTemplates.defaultAdjustmentLayer)
-        )
+        guard !isExporting, !model.placedClips.isEmpty else { return }
         let clips = model.placedClips
-        let silences = model.silences
         let transcript = model.timelineTranscript
+        let title = captionTitle
         isExporting = true
         errorMessage = nil
         Task {
             defer { isExporting = false }
             do {
-                try await FinalCutExporter.open(clips: clips, silences: silences, transcript: transcript, options: options)
+                try await FinalCutExporter.open(clips: clips, transcript: transcript, captionTitle: title)
                 dismiss()
             } catch {
                 Log.export.error("Final Cut export failed: \(error.localizedDescription, privacy: .public)")

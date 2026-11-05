@@ -7,15 +7,6 @@ import AppKit
 import AVFoundation
 import os
 
-/// What the user chose in the Open in Final Cut Pro sheet.
-struct FinalCutExportOptions: Equatable {
-    var removeSilences = true
-    var includeCaptions = true
-    var captionTitleName = TitleTemplates.defaultCaptionTitle
-    var includeAdjustmentLayer = true
-    var adjustmentLayerName = TitleTemplates.defaultAdjustmentLayer
-}
-
 enum FinalCutExportError: LocalizedError {
     case nothingToExport
     case finalCutNotInstalled(URL)
@@ -39,14 +30,14 @@ enum FinalCutExporter {
         bundleIdentifiers.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
     }
 
-    /// Builds the project, writes it next to HT Edit's other caches, and opens
-    /// it in Final Cut Pro. Returns the written file.
+    /// Builds the project (clips, a full-length adjustment clip, and the
+    /// transcript as 3-word titles), writes it next to HT Edit's other caches,
+    /// and opens it in Final Cut Pro. Returns the written file.
     @discardableResult
     static func open(
         clips: [Clip],
-        silences: [CMTimeRange],
         transcript: [TimelineSegment],
-        options: FinalCutExportOptions
+        captionTitle: String
     ) async throws -> URL {
         guard !clips.isEmpty else { throw FinalCutExportError.nothingToExport }
 
@@ -55,22 +46,13 @@ enum FinalCutExporter {
             media.append(try await mediaInfo(for: clip))
         }
 
-        let installed = TitleTemplates.installed()
         let projectName = projectName(for: clips)
         let input = FCPXML.Input(
             projectName: projectName,
             media: media,
-            silences: options.removeSilences
-                ? silences.map { $0.start.seconds..<$0.end.seconds }
-                : [],
             transcript: transcript.map { FCPXML.Caption(start: $0.start, end: $0.end, text: $0.text) },
             wordsPerTitle: 3,
-            captionTitle: options.includeCaptions && !transcript.isEmpty
-                ? TitleTemplates.resolve(options.captionTitleName, installed: installed)
-                : nil,
-            adjustmentLayer: options.includeAdjustmentLayer
-                ? TitleTemplates.resolve(options.adjustmentLayerName, installed: installed)
-                : nil
+            captionTitle: TitleTemplates.resolve(captionTitle, installed: TitleTemplates.installed())
         )
         let xml = FCPXML.document(input)
 

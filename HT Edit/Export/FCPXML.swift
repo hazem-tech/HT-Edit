@@ -48,6 +48,8 @@ nonisolated struct TitleTemplate: Equatable, Sendable {
         case builtIn
         /// Installed in ~/Movies/Motion Templates.
         case installed
+        /// A `.moti` file outside ~/Movies/Motion Templates, where Final Cut doesn't look.
+        case outsideMotionTemplates
         /// Not found on this Mac: Final Cut will show it as missing.
         case notFound
     }
@@ -57,13 +59,19 @@ nonisolated struct TitleTemplate: Equatable, Sendable {
     var source: Source
 }
 
-/// Pure FCPXML generation: clips back to back (optionally with silences cut
-/// out), transcript captions as titles of a few words each, and a title used
-/// as an adjustment layer above everything for the whole length.
+/// Pure FCPXML generation: clips back to back, Final Cut's native adjustment
+/// clip over the whole video, and the transcript as centered titles of a few
+/// words each on top.
+///
+/// Lanes, bottom to top: video (spine) → adjustment clip (lane 1) → titles (lane 2).
 nonisolated enum FCPXML {
 
-    /// The FCPXML version written (Final Cut Pro 11 and later).
-    static let version = "1.13"
+    /// The FCPXML version written (Final Cut Pro 12 and later).
+    static let version = "1.14"
+
+    /// Final Cut's built-in adjustment clip (Edit ▸ Add Adjustment Clip, Final Cut Pro 11.1+).
+    static let adjustmentEffectName = "Adjustment Clip"
+    static let adjustmentEffectUID = "FFAdjustmentEffect"
 
     nonisolated struct Media: Equatable, Sendable {
         var url: URL
@@ -80,7 +88,7 @@ nonisolated enum FCPXML {
     }
 
     nonisolated struct Caption: Equatable, Sendable {
-        /// Timeline seconds (before silences are cut).
+        /// Timeline seconds.
         var start: Double
         var end: Double
         var text: String
@@ -91,27 +99,22 @@ nonisolated enum FCPXML {
         var eventName = "HT Edit"
         /// Clips in timeline order.
         var media: [Media]
-        /// Timeline seconds to cut out. Empty keeps everything.
-        var silences: [Range<Double>] = []
         /// Transcript lines, in timeline seconds.
         var transcript: [Caption] = []
         var wordsPerTitle = 3
-        /// Template for the captions; `nil` leaves them out.
-        var captionTitle: TitleTemplate?
-        /// Template placed above the captions for the whole project; `nil` leaves it out.
-        var adjustmentLayer: TitleTemplate?
+        /// Template for the captions (used when there is a transcript).
+        var captionTitle: TitleTemplate
     }
 
-    /// One kept stretch of a clip, placed on the exported timeline.
+    /// One clip placed on the exported timeline.
     nonisolated struct Piece: Equatable, Sendable {
         var mediaIndex: Int
-        /// Original timeline seconds this piece covers.
+        /// Timeline seconds this clip covers.
         var timelineStart: Double
         var timelineEnd: Double
-        /// Frames into the source file.
-        var sourceStart: Int64
+        /// Frames.
         var duration: Int64
-        /// Frames from the start of the exported timeline.
+        /// Frames from the start of the timeline.
         var offset: Int64
     }
 
@@ -124,48 +127,29 @@ nonisolated enum FCPXML {
 
     // MARK: Timeline
 
-    /// The kept stretches of each clip, back to back.
-    static func pieces(media: [Media], silences: [Range<Double>], rate: FrameRate) -> [Piece] {
+    /// Clips back to back, in whole frames.
+    static func pieces(media: [Media], rate: FrameRate) -> [Piece] {
         var result: [Piece] = []
         var clipStart = 0.0
         var offset: Int64 = 0
-        let sorted = silences.sorted { $0.lowerBound < $1.lowerBound }
         for (index, item) in media.enumerated() {
-            let clipEnd = clipStart + item.duration
-            let available = max(1, rate.frames(item.duration))
-            for kept in subtracting(sorted, from: clipStart..<clipEnd) {
-                let start = rate.frames(kept.lowerBound - clipStart)
-                let end = min(available, rate.frames(kept.upperBound - clipStart))
-                guard end > start else { continue }
+            let frames = rate.frames(item.duration)
+            if frames > 0 {
                 result.append(Piece(
                     mediaIndex: index,
-                    timelineStart: kept.lowerBound,
-                    timelineEnd: kept.upperBound,
-                    sourceStart: start,
-                    duration: end - start,
+                    timelineStart: clipStart,
+                    timelineEnd: clipStart + item.duration,
+                    duration: frames,
                     offset: offset
                 ))
-                offset += end - start
+                offset += frames
             }
-            clipStart = clipEnd
+            clipStart += item.duration
         }
         return result
     }
 
-    /// `range` without the (sorted) `holes`.
-    static func subtracting(_ holes: [Range<Double>], from range: Range<Double>) -> [Range<Double>] {
-        var result: [Range<Double>] = []
-        var cursor = range.lowerBound
-        for hole in holes where hole.upperBound > cursor && hole.lowerBound < range.upperBound {
-            if hole.lowerBound > cursor { result.append(cursor..<hole.lowerBound) }
-            cursor = max(cursor, hole.upperBound)
-        }
-        if cursor < range.upperBound { result.append(cursor..<range.upperBound) }
-        return result
-    }
-
-    /// Where original timeline second `time` lands on the exported timeline, in frames.
-    /// A time inside a cut lands where the next kept piece starts.
+    /// Where timeline second `time` lands on the exported timeline, in frames.
     static func exportedFrame(for time: Double, in pieces: [Piece], rate: FrameRate) -> Int64 {
         for piece in pieces where time < piece.timelineEnd {
             if time <= piece.timelineStart { return piece.offset }
@@ -200,8 +184,8 @@ nonisolated enum FCPXML {
         return result
     }
 
-    /// Word groups on the exported timeline: cut silences are skipped, groups
-    /// never overlap, and anything shorter than a frame is dropped.
+    /// Word groups in frames: they never overlap, and anything shorter than a
+    /// frame is dropped.
     static func placedCaptions(_ input: Input, pieces: [Piece], rate: FrameRate) -> [PlacedCaption] {
         let groups = wordGroups(input.transcript, wordsPerTitle: input.wordsPerTitle)
             .sorted { $0.start < $1.start }
@@ -221,7 +205,7 @@ nonisolated enum FCPXML {
 
     static func document(_ input: Input) -> String {
         let rate = input.media.first { $0.hasVideo }?.frameRate ?? .fps30
-        let pieces = Self.pieces(media: input.media, silences: input.silences, rate: rate)
+        let pieces = Self.pieces(media: input.media, rate: rate)
         let total = pieces.last.map { $0.offset + $0.duration } ?? 0
         let sequenceVideo = input.media.first { $0.hasVideo }
 
@@ -284,55 +268,67 @@ nonisolated enum FCPXML {
             ]))
         }
 
-        func effect(_ template: TitleTemplate) -> String {
-            let id = makeID()
-            resources.append(XMLElementNode("effect", [("id", id), ("name", template.name), ("uid", template.uid)]))
-            return id
-        }
-        var captionEffectID: String?
-        if let template = input.captionTitle { captionEffectID = effect(template) }
-        var adjustmentEffectID: String?
-        if let template = input.adjustmentLayer { adjustmentEffectID = effect(template) }
+        let adjustmentEffectID = makeID()
+        resources.append(XMLElementNode("effect", [
+            ("id", adjustmentEffectID),
+            ("name", adjustmentEffectName),
+            ("uid", adjustmentEffectUID),
+        ]))
 
-        // Connected titles, attached to the spine clip they start over.
+        let captions = placedCaptions(input, pieces: pieces, rate: rate)
+        var captionEffectID: String?
+        if !captions.isEmpty {
+            let id = makeID()
+            captionEffectID = id
+            resources.append(XMLElementNode("effect", [
+                ("id", id),
+                ("name", input.captionTitle.name),
+                ("uid", input.captionTitle.uid),
+            ]))
+        }
+
+        // Connected clips, attached to the spine clip they start over.
+        // Their offsets are in the parent clip's time, which starts at 0.
         var connected: [[XMLElementNode]] = Array(repeating: [], count: pieces.count)
         func attach(_ node: (_ localOffset: Int64) -> XMLElementNode, at frame: Int64) {
             guard let index = pieces.lastIndex(where: { $0.offset <= frame }) else { return }
-            let piece = pieces[index]
-            connected[index].append(node(piece.sourceStart + frame - piece.offset))
+            connected[index].append(node(frame - pieces[index].offset))
         }
 
-        var styleCount = 0
-        if let captionEffectID, let template = input.captionTitle {
-            for caption in placedCaptions(input, pieces: pieces, rate: rate) {
-                styleCount += 1
-                let styleID = "ts\(styleCount)"
+        // Lane 1: the adjustment clip, between the video and the titles, for the whole video.
+        if total > 0 {
+            attach({ local in
+                XMLElementNode("video", [
+                    ("ref", adjustmentEffectID),
+                    ("lane", "1"),
+                    ("offset", rate.time(local)),
+                    ("name", adjustmentEffectName),
+                    ("start", "0s"),
+                    ("duration", rate.time(total)),
+                    ("role", "adjustments"),
+                ])
+            }, at: 0)
+        }
+
+        // Lane 2: captions, centered.
+        if let captionEffectID {
+            for (index, caption) in captions.enumerated() {
+                let styleID = "ts\(index + 1)"
                 attach({ local in
                     XMLElementNode("title", [
                         ("ref", captionEffectID),
-                        ("lane", "1"),
+                        ("lane", "2"),
                         ("offset", rate.time(local)),
-                        ("name", "\(caption.text) - \(template.name)"),
+                        ("name", "\(caption.text) - \(input.captionTitle.name)"),
                         ("duration", rate.time(caption.duration)),
                     ], children: [
                         XMLElementNode("text", children: [XMLElementNode("text-style", [("ref", styleID)], text: caption.text)]),
-                        XMLElementNode("text-style-def", [("id", styleID)], children: [XMLElementNode("text-style")]),
+                        XMLElementNode("text-style-def", [("id", styleID)], children: [
+                            XMLElementNode("text-style", [("alignment", "center")]),
+                        ]),
                     ])
                 }, at: caption.offset)
             }
-        }
-
-        if let adjustmentEffectID, let template = input.adjustmentLayer, total > 0 {
-            let lane = input.captionTitle == nil ? "1" : "2"
-            attach({ local in
-                XMLElementNode("title", [
-                    ("ref", adjustmentEffectID),
-                    ("lane", lane),
-                    ("offset", rate.time(local)),
-                    ("name", template.name),
-                    ("duration", rate.time(total)),
-                ])
-            }, at: 0)
         }
 
         // Spine
@@ -342,7 +338,7 @@ nonisolated enum FCPXML {
                 ("ref", assetIDs[piece.mediaIndex]),
                 ("offset", rate.time(piece.offset)),
                 ("name", item.name),
-                ("start", rate.time(piece.sourceStart)),
+                ("start", "0s"),
                 ("duration", rate.time(piece.duration)),
                 ("tcFormat", "NDF"),
             ], children: connected[index])
@@ -370,7 +366,6 @@ nonisolated enum FCPXML {
     }
 }
 
-/// A minimal XML element with ordered attributes.
 nonisolated struct XMLElementNode: Sendable {
     var name: String
     var attributes: [(String, String)]
