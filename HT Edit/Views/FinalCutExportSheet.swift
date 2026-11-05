@@ -3,6 +3,7 @@
 //  HT Edit
 //
 
+import os
 import SwiftUI
 
 /// Asks how to build the Final Cut Pro project, then opens it there.

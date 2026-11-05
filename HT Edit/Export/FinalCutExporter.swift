@@ -5,6 +5,7 @@
 
 import AppKit
 import AVFoundation
+import os
 
 /// What the user chose in the Open in Final Cut Pro sheet.
 struct FinalCutExportOptions: Equatable {
