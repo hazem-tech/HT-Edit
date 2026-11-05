@@ -24,6 +24,18 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Playback:** always skips the highlighted silences.
 - **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
 
+- **Open in Final Cut Pro:** the film toolbar button (⌘E) sends the timeline to Final Cut Pro as FCPXML 1.13 (Final Cut Pro 11 or later). See below.
+
+## Open in Final Cut Pro
+
+Press the **Open in Final Cut Pro** toolbar button (⌘E). A sheet asks how to build the project, then Final Cut opens it:
+
+- **Cut out silences:** the highlighted silences are left out, so the project matches what you hear when you play it in HT Edit. Turn it off to send every clip whole.
+- **Captions:** if the timeline has a transcript, it's added as titles of **3 words each**, timed to the speech. Titles use **Basic Title** unless you type the name of a different one (or pick one from the list button). Any title installed in `~/Movies/Motion Templates.localized/Titles.localized` can be used.
+- **Adjustment layer:** a title called **Adjustment Layer** (type another name if yours is different) is placed above the captions and covers the entire video. Final Cut has no built-in adjustment layer, so install one as a title, such as one of the free Adjustment Layer titles. If the name isn't installed, the sheet says so and Final Cut shows it as missing.
+
+The FCPXML file is written to `~/Library/Caches/HT Edit/Final Cut/`. If Final Cut Pro isn't installed, HT Edit tells you where the file is so you can import it with **File ▸ Import ▸ XML**.
+
 ## Transcription
 
 Transcription runs through your own **Antigravity CLI (`agy`)**, under your Google account and subscription. There are no API keys, and nothing is charged per request. (Gemini CLI no longer serves individual accounts; Antigravity CLI replaced it.)

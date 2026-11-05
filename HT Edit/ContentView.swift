@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var model: EditorViewModel
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
+    @State private var isFinalCutSheetPresented = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     init(model: EditorViewModel = EditorViewModel()) {
@@ -49,6 +50,9 @@ struct ContentView: View {
                 case .success(let urls): model.add(urls: urls)
                 case .failure(let error): model.errorMessage = error.localizedDescription
                 }
+            }
+            .sheet(isPresented: $isFinalCutSheetPresented) {
+                FinalCutExportSheet(model: model)
             }
             .alert("Something went wrong", isPresented: errorBinding) {
                 Button("OK", role: .cancel) {}
@@ -157,6 +161,14 @@ struct ContentView: View {
             .keyboardShortcut(.space, modifiers: [])
             .disabled(!model.hasMedia)
             .help("Play / Pause (Space)")
+
+            Button("Open in Final Cut Pro", systemImage: "film.stack") {
+                isFinalCutSheetPresented = true
+            }
+            .keyboardShortcut("e")
+            .disabled(model.placedClips.isEmpty)
+            .help("Open the timeline in Final Cut Pro, with captions and an adjustment layer (⌘E)")
+            .accessibilityIdentifier("openInFinalCutButton")
 
             Button("Inspector", systemImage: "sidebar.trailing") {
                 isInspectorPresented.toggle()
