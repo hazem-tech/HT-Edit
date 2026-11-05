@@ -66,7 +66,7 @@ struct FCPXMLTests {
     // MARK: Timeline
 
     @Test func clipsAreBackToBack() {
-        let pieces = FCPXML.pieces(media: [media("a", duration: 5), media("b", duration: 2.5)], rate: .fps30)
+        let pieces = FCPXML.pieces(media: [media("a", duration: 5), media("b", duration: 2.5)], silences: [], rate: .fps30)
         #expect(pieces.map(\.offset) == [0, 150])
         #expect(pieces.map(\.duration) == [150, 75])
         #expect(FCPXML.exportedFrame(for: 6, in: pieces, rate: .fps30) == 180)
@@ -83,10 +83,72 @@ struct FCPXMLTests {
             ],
             captionTitle: basicTitle
         )
-        let pieces = FCPXML.pieces(media: input.media, rate: .fps30)
+        let pieces = FCPXML.pieces(media: input.media, silences: [], rate: .fps30)
         let placed = FCPXML.placedCaptions(input, pieces: pieces, rate: .fps30)
         #expect(placed.map(\.offset) == [0, 30])
         #expect(placed.map(\.duration) == [30, 60])
+    }
+
+    // MARK: Cutting silences
+
+    @Test func silencesAreCutOut() {
+        let pieces = FCPXML.pieces(media: [media("a", duration: 10)], silences: [2..<4], rate: .fps30)
+        #expect(pieces.map(\.sourceStart) == [0, 120])
+        #expect(pieces.map(\.duration) == [60, 180])
+        #expect(pieces.map(\.offset) == [0, 60])
+    }
+
+    @Test func aSilenceAcrossAClipBoundaryTrimsBothClips() {
+        let pieces = FCPXML.pieces(media: [media("a", duration: 5), media("b", duration: 5)], silences: [4..<6], rate: .fps30)
+        #expect(pieces.map(\.mediaIndex) == [0, 1])
+        #expect(pieces.map(\.sourceStart) == [0, 30])
+        #expect(pieces.map(\.duration) == [120, 120])
+        #expect(pieces.map(\.offset) == [0, 120])
+    }
+
+    @Test func timesInsideACutLandWhereTheNextPieceStarts() {
+        let pieces = FCPXML.pieces(media: [media("a", duration: 10)], silences: [2..<4], rate: .fps30)
+        #expect(FCPXML.exportedFrame(for: 1, in: pieces, rate: .fps30) == 30)
+        #expect(FCPXML.exportedFrame(for: 3, in: pieces, rate: .fps30) == 60)
+        #expect(FCPXML.exportedFrame(for: 5, in: pieces, rate: .fps30) == 90)
+        #expect(FCPXML.exportedFrame(for: 99, in: pieces, rate: .fps30) == 240)
+    }
+
+    @Test func captionsSpokenInsideACutAreDropped() {
+        let input = FCPXML.Input(
+            projectName: "p",
+            media: [media("a", duration: 10)],
+            silences: [2..<4],
+            transcript: [
+                FCPXML.Caption(start: 0, end: 1, text: "hello there you"),
+                FCPXML.Caption(start: 2.5, end: 3.5, text: "lost in silence"),
+                FCPXML.Caption(start: 5, end: 6, text: "after the cut"),
+            ],
+            captionTitle: basicTitle
+        )
+        let pieces = FCPXML.pieces(media: input.media, silences: input.silences, rate: .fps30)
+        let placed = FCPXML.placedCaptions(input, pieces: pieces, rate: .fps30)
+        #expect(placed.map(\.text) == ["hello there you", "after the cut"])
+        #expect(placed.map(\.offset) == [0, 90])
+        #expect(placed.map(\.duration) == [30, 30])
+    }
+
+    @Test func cutTimelineInTheDocument() {
+        let input = FCPXML.Input(
+            projectName: "p",
+            media: [media("a", duration: 10)],
+            silences: [2..<4],
+            transcript: [FCPXML.Caption(start: 5, end: 6, text: "after the cut")],
+            captionTitle: basicTitle
+        )
+        let xml = FCPXML.document(input)
+        // Two pieces: 0–2 s and 4–10 s of the file, 8 s (240 frames) in all.
+        #expect(xml.contains("offset=\"0s\" name=\"a\" start=\"0s\" duration=\"6000/3000s\""))
+        #expect(xml.contains("offset=\"6000/3000s\" name=\"a\" start=\"12000/3000s\" duration=\"18000/3000s\""))
+        #expect(xml.contains("<sequence format=\"r1\" duration=\"24000/3000s\""))
+        // The adjustment clip covers the cut length; the title sits at 5 s of the file (3 s on the timeline).
+        #expect(xml.contains("name=\"Adjustment Clip\" start=\"0s\" duration=\"24000/3000s\""))
+        #expect(xml.contains("lane=\"2\" offset=\"15000/3000s\""))
     }
 
     // MARK: Document

@@ -7,7 +7,7 @@ import os
 import SwiftUI
 
 /// Asks which title to use for the captions, then opens the timeline in
-/// Final Cut Pro: the clips, Final Cut's adjustment clip over the whole video,
+/// Final Cut Pro: the clips with the silences cut out, Final Cut's adjustment clip over the whole video,
 /// and the transcript as centered titles of 3 words each on top.
 struct FinalCutExportSheet: View {
     @Bindable var model: EditorViewModel
@@ -69,7 +69,7 @@ struct FinalCutExportSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Caption title").font(.headline)
             Text("Type the name of a title, such as Basic Title, or the path to its .moti file or folder. HT Edit finds it in Final Cut's titles and in ~/Movies/Motion Templates.")
-            Text("The transcript is split into titles of 3 words each, centered. An adjustment clip covers the whole video, between the video and the titles.")
+            Text("Silences are cut out. The transcript is split into titles of 3 words each, centered. An adjustment clip covers the whole video, between the video and the titles.")
                 .foregroundStyle(.secondary)
         }
         .font(.callout)
@@ -99,6 +99,7 @@ struct FinalCutExportSheet: View {
     private func export() {
         guard !isExporting, !model.placedClips.isEmpty else { return }
         let clips = model.placedClips
+        let silences = model.silences
         let transcript = model.timelineTranscript
         let title = captionTitle
         isExporting = true
@@ -106,7 +107,7 @@ struct FinalCutExportSheet: View {
         Task {
             defer { isExporting = false }
             do {
-                try await FinalCutExporter.open(clips: clips, transcript: transcript, captionTitle: title)
+                try await FinalCutExporter.open(clips: clips, silences: silences, transcript: transcript, captionTitle: title)
                 dismiss()
             } catch {
                 Log.export.error("Final Cut export failed: \(error.localizedDescription, privacy: .public)")

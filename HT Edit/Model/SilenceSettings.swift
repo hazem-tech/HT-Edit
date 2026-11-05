@@ -24,4 +24,39 @@ nonisolated struct SilenceSettings: Equatable, Hashable, Sendable {
     static let paddingRange: ClosedRange<Double> = 0...1
 
     static let `default` = SilenceSettings()
+
+    // MARK: Remembering the last settings
+
+    private static let thresholdKey = "silence.thresholdDB"
+    private static let paddingStartKey = "silence.paddingStart"
+    private static let paddingEndKey = "silence.paddingEnd"
+
+    /// The settings last saved in `defaults`, clamped to the allowed ranges;
+    /// `.default` for anything never saved.
+    static func saved(in defaults: UserDefaults) -> SilenceSettings {
+        var settings = SilenceSettings.default
+        if let value = defaults.object(forKey: thresholdKey) as? Double, value.isFinite {
+            settings.thresholdDB = value.clamped(to: thresholdRange)
+        }
+        if let value = defaults.object(forKey: paddingStartKey) as? Double, value.isFinite {
+            settings.paddingStart = value.clamped(to: paddingRange)
+        }
+        if let value = defaults.object(forKey: paddingEndKey) as? Double, value.isFinite {
+            settings.paddingEnd = value.clamped(to: paddingRange)
+        }
+        return settings
+    }
+
+    /// Remembers threshold and padding for the next launch.
+    func save(to defaults: UserDefaults) {
+        defaults.set(thresholdDB, forKey: Self.thresholdKey)
+        defaults.set(paddingStart, forKey: Self.paddingStartKey)
+        defaults.set(paddingEnd, forKey: Self.paddingEndKey)
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
 }

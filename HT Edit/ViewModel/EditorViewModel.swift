@@ -42,9 +42,12 @@ final class EditorViewModel {
     private(set) var levelsRevision = 0
     var errorMessage: String?
 
+    /// Remembered across launches (threshold and padding).
     var settings = SilenceSettings.default {
         didSet {
-            if settings != oldValue { recomputeSilences() }
+            guard settings != oldValue else { return }
+            if let settingsDefaults { settings.save(to: settingsDefaults) }
+            recomputeSilences()
         }
     }
 
@@ -91,6 +94,8 @@ final class EditorViewModel {
     // MARK: Private state
 
     private let analyzer: AudioLevelAnalyzer
+    /// Where silence settings are remembered; `nil` doesn't remember them (tests).
+    @ObservationIgnored private let settingsDefaults: UserDefaults?
     /// Levels live outside the observed `clips` array: chunks are written in
     /// place without copying or re-rendering; `levelsRevision` publishes them.
     @ObservationIgnored private let levelsStore = LevelsStore()
@@ -110,10 +115,18 @@ final class EditorViewModel {
     private static let levelsPublishInterval: Duration = .milliseconds(50)
     private static let playerReadyTimeout: Duration = .seconds(15)
 
-    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(), transcription: TranscriptionController = .live()) {
+    init(
+        analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(),
+        transcription: TranscriptionController = .live(),
+        settingsDefaults: UserDefaults? = .standard
+    ) {
         self.analyzer = analyzer
         self.transcription = transcription
+        self.settingsDefaults = settingsDefaults
         self.player = AVPlayer()
+        if let settingsDefaults {
+            self.settings = SilenceSettings.saved(in: settingsDefaults)
+        }
         configurePlayer()
     }
 
@@ -125,6 +138,7 @@ final class EditorViewModel {
     ) {
         self.analyzer = AudioLevelAnalyzer(cache: nil)
         self.transcription = transcription
+        self.settingsDefaults = nil
         self.player = AVPlayer()
         self.clips = analyzedClips.map { entry in
             var clip = entry.clip

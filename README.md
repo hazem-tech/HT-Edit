@@ -20,7 +20,7 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **One seamless timeline:** a yellow line marks where each clip starts.
 - **Clip sidebar:** shows each clip's thumbnail, name and length. Drag clips to reorder them. Show or hide it with the system sidebar button.
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
-- **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
+- **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly, and the last settings you chose are remembered next time.
 - **Playback:** always skips the highlighted silences.
 - **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
 
@@ -30,7 +30,7 @@ The clips are test videos the app generates itself: solid green frames, with a t
 
 Press the **Open in Final Cut Pro** toolbar button (⌘E), type the title to use for captions (or keep **Basic Title**), and press **Open in Final Cut Pro**. Final Cut opens a project with three layers, from bottom to top:
 
-1. **The video:** your clips, back to back.
+1. **The video:** your clips, back to back, with the highlighted silences cut out.
 2. **An adjustment clip:** Final Cut's built-in adjustment clip, covering the entire video.
 3. **Captions:** if the timeline has a transcript, it's split into titles of **3 words each**, centered and timed to the speech.
 

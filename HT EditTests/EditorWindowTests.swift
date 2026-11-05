@@ -24,7 +24,7 @@ struct EditorWindowTests {
 
         var analyzer = AudioLevelAnalyzer(cache: LevelsCache(directory: directory.appending(path: "cache")))
         analyzer.stallTimeout = .seconds(5)
-        let model = EditorViewModel(analyzer: analyzer)
+        let model = EditorViewModel(analyzer: analyzer, settingsDefaults: nil)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),

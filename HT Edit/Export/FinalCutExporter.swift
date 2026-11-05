@@ -30,12 +30,13 @@ enum FinalCutExporter {
         bundleIdentifiers.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
     }
 
-    /// Builds the project (clips, a full-length adjustment clip, and the
+    /// Builds the project (clips with the silences cut out, a full-length adjustment clip, and the
     /// transcript as 3-word titles), writes it next to HT Edit's other caches,
     /// and opens it in Final Cut Pro. Returns the written file.
     @discardableResult
     static func open(
         clips: [Clip],
+        silences: [CMTimeRange],
         transcript: [TimelineSegment],
         captionTitle: String
     ) async throws -> URL {
@@ -50,6 +51,7 @@ enum FinalCutExporter {
         let input = FCPXML.Input(
             projectName: projectName,
             media: media,
+            silences: silences.map { $0.start.seconds..<$0.end.seconds },
             transcript: transcript.map { FCPXML.Caption(start: $0.start, end: $0.end, text: $0.text) },
             wordsPerTitle: 3,
             captionTitle: TitleTemplates.resolve(captionTitle, installed: TitleTemplates.installed())

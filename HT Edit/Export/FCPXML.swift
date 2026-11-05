@@ -59,7 +59,8 @@ nonisolated struct TitleTemplate: Equatable, Sendable {
     var source: Source
 }
 
-/// Pure FCPXML generation: clips back to back, Final Cut's native adjustment
+/// Pure FCPXML generation: clips back to back with the silences cut out,
+/// Final Cut's native adjustment
 /// clip over the whole video, and the transcript as centered titles of a few
 /// words each on top.
 ///
@@ -88,7 +89,7 @@ nonisolated enum FCPXML {
     }
 
     nonisolated struct Caption: Equatable, Sendable {
-        /// Timeline seconds.
+        /// Timeline seconds (before silences are cut).
         var start: Double
         var end: Double
         var text: String
@@ -99,6 +100,8 @@ nonisolated enum FCPXML {
         var eventName = "HT Edit"
         /// Clips in timeline order.
         var media: [Media]
+        /// Timeline seconds to cut out.
+        var silences: [Range<Double>] = []
         /// Transcript lines, in timeline seconds.
         var transcript: [Caption] = []
         var wordsPerTitle = 3
@@ -106,12 +109,14 @@ nonisolated enum FCPXML {
         var captionTitle: TitleTemplate
     }
 
-    /// One clip placed on the exported timeline.
+    /// One kept stretch of a clip, placed on the exported timeline.
     nonisolated struct Piece: Equatable, Sendable {
         var mediaIndex: Int
-        /// Timeline seconds this clip covers.
+        /// Original timeline seconds this piece covers.
         var timelineStart: Double
         var timelineEnd: Double
+        /// Frames into the source file.
+        var sourceStart: Int64
         /// Frames.
         var duration: Int64
         /// Frames from the start of the timeline.
@@ -127,29 +132,48 @@ nonisolated enum FCPXML {
 
     // MARK: Timeline
 
-    /// Clips back to back, in whole frames.
-    static func pieces(media: [Media], rate: FrameRate) -> [Piece] {
+    /// The kept stretches of each clip (everything but `silences`), back to back, in whole frames.
+    static func pieces(media: [Media], silences: [Range<Double>], rate: FrameRate) -> [Piece] {
         var result: [Piece] = []
         var clipStart = 0.0
         var offset: Int64 = 0
+        let sorted = silences.sorted { $0.lowerBound < $1.lowerBound }
         for (index, item) in media.enumerated() {
-            let frames = rate.frames(item.duration)
-            if frames > 0 {
+            let clipEnd = clipStart + item.duration
+            let available = rate.frames(item.duration)
+            for kept in subtracting(sorted, from: clipStart..<clipEnd) {
+                let start = rate.frames(kept.lowerBound - clipStart)
+                let end = min(available, rate.frames(kept.upperBound - clipStart))
+                guard end > start else { continue }
                 result.append(Piece(
                     mediaIndex: index,
-                    timelineStart: clipStart,
-                    timelineEnd: clipStart + item.duration,
-                    duration: frames,
+                    timelineStart: kept.lowerBound,
+                    timelineEnd: kept.upperBound,
+                    sourceStart: start,
+                    duration: end - start,
                     offset: offset
                 ))
-                offset += frames
+                offset += end - start
             }
-            clipStart += item.duration
+            clipStart = clipEnd
         }
         return result
     }
 
-    /// Where timeline second `time` lands on the exported timeline, in frames.
+    /// `range` without the (sorted) `holes`.
+    static func subtracting(_ holes: [Range<Double>], from range: Range<Double>) -> [Range<Double>] {
+        var result: [Range<Double>] = []
+        var cursor = range.lowerBound
+        for hole in holes where hole.upperBound > cursor && hole.lowerBound < range.upperBound {
+            if hole.lowerBound > cursor { result.append(cursor..<hole.lowerBound) }
+            cursor = max(cursor, hole.upperBound)
+        }
+        if cursor < range.upperBound { result.append(cursor..<range.upperBound) }
+        return result
+    }
+
+    /// Where original timeline second `time` lands on the exported timeline, in
+    /// frames. A time inside a cut lands where the next kept piece starts.
     static func exportedFrame(for time: Double, in pieces: [Piece], rate: FrameRate) -> Int64 {
         for piece in pieces where time < piece.timelineEnd {
             if time <= piece.timelineStart { return piece.offset }
@@ -184,8 +208,8 @@ nonisolated enum FCPXML {
         return result
     }
 
-    /// Word groups in frames: they never overlap, and anything shorter than a
-    /// frame is dropped.
+    /// Word groups on the cut timeline: words spoken inside a cut are dropped,
+    /// groups never overlap, and anything shorter than a frame is dropped.
     static func placedCaptions(_ input: Input, pieces: [Piece], rate: FrameRate) -> [PlacedCaption] {
         let groups = wordGroups(input.transcript, wordsPerTitle: input.wordsPerTitle)
             .sorted { $0.start < $1.start }
@@ -205,7 +229,7 @@ nonisolated enum FCPXML {
 
     static func document(_ input: Input) -> String {
         let rate = input.media.first { $0.hasVideo }?.frameRate ?? .fps30
-        let pieces = Self.pieces(media: input.media, rate: rate)
+        let pieces = Self.pieces(media: input.media, silences: input.silences, rate: rate)
         let total = pieces.last.map { $0.offset + $0.duration } ?? 0
         let sequenceVideo = input.media.first { $0.hasVideo }
 
@@ -288,11 +312,12 @@ nonisolated enum FCPXML {
         }
 
         // Connected clips, attached to the spine clip they start over.
-        // Their offsets are in the parent clip's time, which starts at 0.
+        // Their offsets are in the parent clip's source time.
         var connected: [[XMLElementNode]] = Array(repeating: [], count: pieces.count)
         func attach(_ node: (_ localOffset: Int64) -> XMLElementNode, at frame: Int64) {
             guard let index = pieces.lastIndex(where: { $0.offset <= frame }) else { return }
-            connected[index].append(node(frame - pieces[index].offset))
+            let piece = pieces[index]
+            connected[index].append(node(piece.sourceStart + frame - piece.offset))
         }
 
         // Lane 1: the adjustment clip, between the video and the titles, for the whole video.
@@ -338,7 +363,7 @@ nonisolated enum FCPXML {
                 ("ref", assetIDs[piece.mediaIndex]),
                 ("offset", rate.time(piece.offset)),
                 ("name", item.name),
-                ("start", "0s"),
+                ("start", rate.time(piece.sourceStart)),
                 ("duration", rate.time(piece.duration)),
                 ("tcFormat", "NDF"),
             ], children: connected[index])

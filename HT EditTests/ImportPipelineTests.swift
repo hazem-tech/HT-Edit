@@ -21,7 +21,7 @@ struct ImportPipelineTests {
     private func makeModel(cacheDirectory: URL) -> EditorViewModel {
         var analyzer = AudioLevelAnalyzer(cache: LevelsCache(directory: cacheDirectory))
         analyzer.stallTimeout = .seconds(5)
-        return EditorViewModel(analyzer: analyzer)
+        return EditorViewModel(analyzer: analyzer, settingsDefaults: nil)
     }
 
     private func waitForImport(_ model: EditorViewModel, expectingVideo: Bool) async throws {
