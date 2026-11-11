@@ -31,7 +31,8 @@ struct TranscriptWordsTests {
         #expect(abs(words[1].end - words[1].start - 1.5) < 1e-9, "twice as long, twice the time")
         let contiguous = zip(words, words.dropFirst()).allSatisfy { $0.end == $1.start }
         #expect(contiguous)
-        #expect(words.allSatisfy(\.isApproximate))
+        let allApproximate = words.allSatisfy { $0.isApproximate }
+        #expect(allApproximate)
     }
 
     @Test func missingTimesAreFilledFromTheNeighbors() {
