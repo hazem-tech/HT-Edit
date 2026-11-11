@@ -117,18 +117,24 @@ struct TranscriptTimelineTests {
     }
 
     @Test func availableModelsComeFromTheAgyListCheapestFirst() {
+        // The real `agy models` format: slug, a tab, then the display name.
         let list = """
-        Available models:
-          claude-sonnet-5-5        Claude Sonnet
-          gemini-3.6-flash         Gemini 3.6 Flash (default)
-          gemini-3.5-flash-lite    Gemini 3.5 Flash-Lite
+        Fetching available models...
+        gemini-4-argon-medium\tGemini 4 Argon (Medium)
+        gemini-3.8-flash-high\tGemini 3.8 Flash (High)
+        gemini-3.8-flash-low\tGemini 3.8 Flash (Low)
+        claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)
+        gpt-oss-120b-medium\tGPT-OSS 120B (Medium)
         """
-        // Claude can't hear audio, and "gemini-3.5-flash" only appears as part of "-lite".
-        #expect(TranscriptionModel.available(inModelList: list).map(\.id) == ["gemini-3.5-flash-lite", "gemini-3.6-flash"])
+        // Only catalog models count, listed cheapest first whatever order agy uses.
+        #expect(TranscriptionModel.available(inModelList: list).map(\.id) == ["gemini-3.8-flash-low", "gemini-3.8-flash-high"])
     }
 
     @Test func availableModelsMatchDisplayNamesAndPreviewSlugs() {
-        #expect(TranscriptionModel.available(inModelList: "Gemini 3.1 Pro\ngemini-3.6-flash-preview").map(\.id) == ["gemini-3.6-flash", "gemini-3.1-pro"])
+        #expect(TranscriptionModel.available(inModelList: "Gemini 3.8 Flash (High)\ngemini-3.8-flash-medium-preview").map(\.id)
+                == ["gemini-3.8-flash-medium", "gemini-3.8-flash-high"])
+        // A longer name isn't a match: "-lowest" isn't "-low", and "-lite" variants are different models.
+        #expect(TranscriptionModel.available(inModelList: "gemini-3.8-flash-lowest\ngemini-3.8-flash-high-lite").isEmpty)
         #expect(TranscriptionModel.available(inModelList: "gpt-oss-120b").isEmpty)
     }
 }
