@@ -128,8 +128,8 @@ final class HT_EditUITests: XCTestCase {
 
     // MARK: Transcript
 
-    /// With the fake transcriber (no Google sign-in needed): the Transcript tab
-    /// offers the cheapest model and an empty context, and Transcribe fills in rows.
+    /// With the fake transcriber (no Whisper setup needed): the Transcript tab
+    /// detects the language by default with an empty context, and Transcribe fills in rows.
     @MainActor
     func testTranscribeFillsInTimestampedRows() throws {
         let app = launchWithFixture("h264Landscape", extraArguments: ["-UITestFakeTranscription", "1"])
@@ -140,10 +140,10 @@ final class HT_EditUITests: XCTestCase {
         expect(tab != nil, "Transcript tab not found", app)
         tab?.click()
 
-        let picker = app.descendants(matching: .any).matching(identifier: "transcriptModelPicker").firstMatch
-        expect(picker.waitForExistence(timeout: 5), "Model picker not found", app)
+        let picker = app.descendants(matching: .any).matching(identifier: "transcriptLanguagePicker").firstMatch
+        expect(picker.waitForExistence(timeout: 5), "Language picker not found", app)
         let pickerValue = (picker.value as? String) ?? picker.label
-        expect(pickerValue.contains("(cheapest)"), "Picker should default to the cheapest model, shows \(pickerValue)", app)
+        expect(pickerValue.contains("Detect automatically"), "Language should default to detecting it, shows \(pickerValue)", app)
 
         let context = app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch
         expect(context.waitForExistence(timeout: 5), "Context field not found", app)

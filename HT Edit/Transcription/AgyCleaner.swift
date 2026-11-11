@@ -1,40 +1,24 @@
 //
-//  AgyEngine.swift
+//  AgyCleaner.swift
 //  HT Edit
 //
-//  Transcribes audio with the user's own Antigravity CLI (`agy`): it runs under
-//  their Google sign-in and subscription, so HT Edit holds no API key and pays
-//  nothing per call. `scripts/agy-probe.sh` runs the same command by hand.
+//  Proofreads Whisper's transcript with the user's own Antigravity CLI (`agy`),
+//  under their Google sign-in and subscription: no API key, nothing per call.
+//  Only text is sent, never audio, and the reply can only change a line's
+//  words, never its timing. `scripts/agy-probe.sh` runs the same command by hand.
 //
 
 import Foundation
 import os
 
-/// Whether transcription can run, as far as the engine can tell.
-nonisolated enum EngineStatus: Equatable, Sendable {
-    case unknown
-    case checking
-    /// Ready, with the models the picker should offer (cheapest first).
-    case ready([TranscriptionModel])
-    case notInstalled
-    case notSignedIn
-    case failed(String)
-}
-
-/// Turns one audio file into timed segments (seconds from the start of that file).
-nonisolated protocol TranscriptionEngine: Sendable {
-    func checkStatus() async -> EngineStatus
-    func transcribe(audio: URL, duration: Double, model: String, context: String) async throws -> [TranscriptSegment]
-}
-
-nonisolated enum AgyError: LocalizedError, Equatable {
+nonisolated enum AgyError: LocalizedError, Equatable, FatalTranscriptionError {
     case notInstalled
     case notSignedIn
     case timedOut
     case failed(String)
     case invalidOutput(String)
 
-    /// Errors that will fail every chunk the same way: stop instead of retrying.
+    /// Errors that will fail every call the same way: stop instead of retrying.
     var isFatal: Bool {
         switch self {
         case .notInstalled, .notSignedIn: true
@@ -48,7 +32,7 @@ nonisolated enum AgyError: LocalizedError, Equatable {
         case .notSignedIn: "Antigravity CLI isn't signed in. Run agy in Terminal once to sign in."
         case .timedOut: "Antigravity didn't answer in time."
         case .failed(let reason): "Antigravity failed: \(reason)"
-        case .invalidOutput(let excerpt): "Antigravity returned something that isn't a transcript: \(excerpt)"
+        case .invalidOutput(let excerpt): "Antigravity returned something unexpected: \(excerpt)"
         }
     }
 
@@ -76,34 +60,49 @@ nonisolated enum AgyCommand {
 
     /// JSON Schema for the answer, passed with `--json-schema` so the reply
     /// comes back as structured output instead of free text.
-    static let transcriptSchema = #"{"type":"object","properties":{"segments":{"type":"array","items":{"type":"object","properties":{"start":{"type":"number"},"end":{"type":"number"},"text":{"type":"string"}},"required":["start","end","text"]}}},"required":["segments"]}"#
+    static let cleanupSchema = #"{"type":"object","properties":{"lines":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"text":{"type":"string"}},"required":["id","text"]}}},"required":["lines"]}"#
 
-    /// Headless transcription of `fileName`, which must be in the working directory.
-    static func transcribe(fileName: String, duration: Double, model: String, context: String, timeout: Duration) -> [String] {
+    /// Most transcript characters sent as background with each batch, so the
+    /// model knows what the whole clip is about.
+    static let referenceLimit = 12_000
+
+    static func cleanup(lines: [(id: Int, text: String)], reference: String, model: String, context: String, timeout: Duration) -> [String] {
         [
-            "-p", prompt(fileName: fileName, duration: duration, context: context),
+            "-p", prompt(lines: lines, reference: reference, context: context),
             "--output-format", "json",
-            "--json-schema", transcriptSchema,
+            "--json-schema", cleanupSchema,
             "--model", model,
             "--print-timeout", "\(Int(timeout.components.seconds))s",
         ]
     }
 
-    static func prompt(fileName: String, duration: Double, context: String) -> String {
-        var lines = [
-            "Transcribe the speech in the audio file @\(fileName) verbatim, in the language that is spoken.",
-            "The file is \(String(format: "%.1f", duration)) seconds long.",
-            "Split the speech into short segments at sentence or phrase boundaries, each at most about 10 seconds.",
-            "For each segment give start and end in seconds from the beginning of this file, and the text.",
-            "If there is no speech, return an empty list.",
-            "Only read that file: don't run commands or change any files.",
+    static func prompt(lines: [(id: Int, text: String)], reference: String, context: String) -> String {
+        var parts = [
+            "You are proofreading an automatic speech-to-text transcript. A speech recognizer wrote each line below; each has an id.",
+            "Fix only words the recognizer clearly misheard, using the meaning of the surrounding lines, the whole transcript and the context.",
+            "Rules:",
+            "- Keep the speaker's own dialect and wording. If they speak a dialect (for example Egyptian Arabic), keep that dialect: never rewrite it into the standard or formal language, and never make it more formal.",
+            "- Never drop, summarize, shorten, merge, split, reorder or add anything. Repeated words, false starts and filler stay. Every input line gets exactly one output line with the same id.",
+            "- When the speaker says an English word or a product name, write it the usual way in Latin letters (for example ChatGPT, Gemini, privacy), even inside an Arabic line.",
+            "- If a line is already right, or you aren't sure, return it unchanged.",
+            "- Don't run commands, and don't read or change any files.",
         ]
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         if !context.isEmpty {
-            lines.append("Context from the user, to get names, terms and spellings right: \(context)")
+            parts.append("Context from the user (names, terms, spellings, topic): \(context)")
         }
-        lines.append(#"Reply only with JSON of the form {"segments":[{"start":0.0,"end":2.5,"text":"..."}]}."#)
-        return lines.joined(separator: "\n")
+        let reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !reference.isEmpty {
+            parts.append("The whole transcript, for reference only (don't return it):\n\(String(reference.prefix(referenceLimit)))")
+        }
+        struct Payload: Encodable { var id: Int; var text: String }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        let json = (try? encoder.encode(lines.map { Payload(id: $0.id, text: $0.text) }))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        parts.append("Lines to proofread (JSON):\n\(json)")
+        parts.append(#"Reply only with JSON of the form {"lines":[{"id":0,"text":"..."}]}."#)
+        return parts.joined(separator: "\n")
     }
 }
 
@@ -112,37 +111,46 @@ nonisolated enum AgyCommand {
 /// Reads `agy --output-format json` output, and tolerates the model replying
 /// in plain text (with or without a code fence) when structured output isn't used.
 nonisolated enum AgyOutputParser {
-    static func segments(from stdout: String) throws -> [TranscriptSegment] {
+    struct Line: Decodable, Equatable, Sendable {
+        var id: Int
+        var text: String
+    }
+
+    static func lines(from stdout: String) throws -> [Line] {
         let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(trimmed.utf8)) {
             if let status = envelope.status, status.uppercased() != "SUCCESS" {
                 let reason = envelope.error ?? envelope.response ?? status
                 throw AgyError.looksLikeSignInProblem(reason) ? AgyError.notSignedIn : AgyError.failed(reason)
             }
-            if let structured = envelope.structuredOutput { return structured.segments }
-            if let response = envelope.response { return try segments(fromText: response) }
+            if let structured = envelope.structuredOutput { return structured.lines }
+            if let response = envelope.response { return try lines(fromText: response) }
         }
-        return try segments(fromText: trimmed)
+        return try lines(fromText: trimmed)
     }
 
-    /// Finds the JSON in a model reply: `{"segments": [...]}` or a bare `[...]`.
-    static func segments(fromText text: String) throws -> [TranscriptSegment] {
+    /// Finds the JSON in a model reply: `{"lines": [...]}` or a bare `[...]`.
+    static func lines(fromText text: String) throws -> [Line] {
         let decoder = JSONDecoder()
         for opener in ["{", "["] {
             guard let start = text.firstIndex(of: Character(opener)),
                   let end = text.lastIndex(of: opener == "{" ? "}" : "]"), start < end else { continue }
             let data = Data(text[start...end].utf8)
-            if let list = try? decoder.decode(SegmentList.self, from: data) { return list.segments }
-            if let array = try? decoder.decode([RawSegment].self, from: data) { return array.map(\.segment) }
+            if let list = try? decoder.decode(LineList.self, from: data) { return list.lines }
+            if let array = try? decoder.decode([Line].self, from: data) { return array }
         }
         throw AgyError.invalidOutput(String(text.prefix(200)))
+    }
+
+    private struct LineList: Decodable {
+        var lines: [Line]
     }
 
     private struct Envelope: Decodable {
         var status: String?
         var response: String?
         var error: String?
-        var structuredOutput: SegmentList?
+        var structuredOutput: LineList?
 
         enum CodingKeys: String, CodingKey {
             case status, response, error
@@ -154,67 +162,41 @@ nonisolated enum AgyOutputParser {
             status = try? container.decode(String.self, forKey: .status)
             response = try? container.decode(String.self, forKey: .response)
             error = try? container.decode(String.self, forKey: .error)
-            structuredOutput = try? container.decode(SegmentList.self, forKey: .structuredOutput)
+            structuredOutput = try? container.decode(LineList.self, forKey: .structuredOutput)
             guard status != nil || response != nil || structuredOutput != nil else {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Not an agy envelope"))
             }
         }
     }
+}
 
-    private struct SegmentList: Decodable {
-        var segments: [TranscriptSegment]
+// MARK: - Guard
 
-        enum CodingKeys: String, CodingKey { case segments }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            segments = try container.decode([RawSegment].self, forKey: .segments).map(\.segment)
-        }
+/// Decides whether a proofread line may replace the original. The model is
+/// told never to drop or summarize; this enforces it.
+nonisolated enum CleanupGuard {
+    /// The corrected text, or `nil` to keep the original line.
+    static func accept(original: String, corrected: String?) -> String? {
+        guard let corrected else { return nil }
+        let text = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != original else { return nil }
+        let before = wordCount(original), after = wordCount(text)
+        // Lost or invented words: allow a little merging ("ال chat" → "الـchat"), no more.
+        let lowest = before <= 3 ? before - 1 : Int((Double(before) * 0.7).rounded(.down))
+        let highest = before <= 3 ? before + 1 : Int((Double(before) * 1.4).rounded(.up))
+        guard after >= max(1, lowest), after <= highest else { return nil }
+        return text
     }
 
-    /// A segment whose times may be numbers or strings like `"1:02.5"`, `"00:01:02,500"` or `"62.5s"`.
-    private struct RawSegment: Decodable {
-        var segment: TranscriptSegment
-
-        enum CodingKeys: String, CodingKey { case start, end, text }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            func seconds(_ key: CodingKeys) throws -> Double {
-                if let value = try? container.decode(Double.self, forKey: key) { return value }
-                let string = try container.decode(String.self, forKey: key)
-                guard let value = AgyOutputParser.seconds(from: string) else {
-                    throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "Bad time \(string)")
-                }
-                return value
-            }
-            segment = TranscriptSegment(
-                start: try seconds(.start),
-                end: try seconds(.end),
-                text: try container.decode(String.self, forKey: .text)
-            )
-        }
-    }
-
-    /// Parses `"62.5"`, `"62.5s"`, `"1:02.5"` and `"00:01:02,500"` into seconds.
-    static func seconds(from string: String) -> Double? {
-        var text = string.trimmingCharacters(in: .whitespaces).replacing(",", with: ".")
-        if text.hasSuffix("s") { text.removeLast() }
-        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
-        guard (1...3).contains(parts.count) else { return nil }
-        var total = 0.0
-        for part in parts {
-            guard let value = Double(part), value >= 0 else { return nil }
-            total = total * 60 + value
-        }
-        return total
+    static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
     }
 }
 
-// MARK: - Engine
+// MARK: - Cleaner
 
 /// Runs the installed `agy`. Finding it is cached; everything else runs per call.
-actor AgyEngine: TranscriptionEngine {
+actor AgyCleaner: TranscriptCleaner {
     /// Where to look when `agy` isn't on the login shell's `PATH`. The installer uses `~/.local/bin`.
     nonisolated static let candidateDirectories = [
         URL.homeDirectory.appending(path: ".local/bin", directoryHint: .isDirectory),
@@ -222,14 +204,17 @@ actor AgyEngine: TranscriptionEngine {
         URL(filePath: "/usr/local/bin", directoryHint: .isDirectory),
     ]
 
+    /// Lines per request: small enough for a quick reply, large enough to keep the call count low.
+    nonisolated static let batchSize = 80
+
     private let fixedExecutable: URL?
-    private let chunkTimeout: Duration
+    private let timeout: Duration
     private var located: URL?
 
     /// - Parameter executable: a specific `agy` to run (tests); `nil` finds the installed one.
-    init(executable: URL? = nil, chunkTimeout: Duration = .seconds(300)) {
+    init(executable: URL? = nil, timeout: Duration = .seconds(300)) {
         self.fixedExecutable = executable
-        self.chunkTimeout = chunkTimeout
+        self.timeout = timeout
     }
 
     func checkStatus() async -> EngineStatus {
@@ -243,32 +228,50 @@ actor AgyEngine: TranscriptionEngine {
             }
             let models = TranscriptionModel.available(inModelList: output.stdout)
             Log.transcription.notice("agy models: \(models.map(\.id).joined(separator: ", "), privacy: .public)")
-            // An unrecognized list format shouldn't block transcription: offer the whole catalog.
+            // An unrecognized list format shouldn't block cleanup: offer the whole catalog.
             return .ready(models.isEmpty ? TranscriptionModel.catalog : models)
         } catch {
             return .failed("agy didn't answer. If you haven't signed in yet, run agy in Terminal once.")
         }
     }
 
-    func transcribe(audio: URL, duration: Double, model: String, context: String) async throws -> [TranscriptSegment] {
+    func clean(_ lines: [String], model: String, context: String) async throws -> [String?] {
         guard let agy = await executable() else { throw AgyError.notInstalled }
-        let arguments = AgyCommand.transcribe(
-            fileName: audio.lastPathComponent, duration: duration, model: model, context: context, timeout: chunkTimeout
-        )
+        guard !lines.isEmpty else { return [] }
+        let reference = lines.joined(separator: "\n")
+        // agy needs a working folder; give it an empty one so it can't see anything else.
+        let folder = FileManager.default.temporaryDirectory.appending(path: "cleanup-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        var result = [String?](repeating: nil, count: lines.count)
+        for batchStart in stride(from: 0, to: lines.count, by: Self.batchSize) {
+            try Task.checkCancellation()
+            let ids = Array(batchStart..<min(lines.count, batchStart + Self.batchSize))
+            let arguments = AgyCommand.cleanup(
+                lines: ids.map { ($0, lines[$0]) }, reference: lines.count > ids.count ? reference : "",
+                model: model, context: context, timeout: timeout
+            )
+            let reply = try await run(agy, arguments: arguments, in: folder)
+            for line in reply where ids.contains(line.id) {
+                result[line.id] = CleanupGuard.accept(original: lines[line.id], corrected: line.text)
+            }
+        }
+        return result
+    }
+
+    private func run(_ agy: URL, arguments: [String], in folder: URL) async throws -> [AgyOutputParser.Line] {
         let output: ProcessOutput
         do {
             output = try await ProcessRunner.run(
-                agy,
-                arguments: arguments,
-                currentDirectory: audio.deletingLastPathComponent(),
-                environment: environment(for: agy),
-                timeout: chunkTimeout + .seconds(30)
+                agy, arguments: arguments, currentDirectory: folder,
+                environment: environment(for: agy), timeout: timeout + .seconds(30)
             )
         } catch ProcessRunnerError.timedOut {
             throw AgyError.timedOut
         }
         guard output.status == 0 else { throw AgyError.from(output) }
-        return try AgyOutputParser.segments(from: output.stdout)
+        return try AgyOutputParser.lines(from: output.stdout)
     }
 
     // MARK: Locating agy

@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// A model Antigravity can run that hears audio and returns timestamps.
+/// A Gemini model Antigravity can run to proofread Whisper's transcript.
 nonisolated struct TranscriptionModel: Identifiable, Hashable, Sendable {
     /// The slug passed to `agy --model`.
     let id: String
@@ -13,10 +13,9 @@ nonisolated struct TranscriptionModel: Identifiable, Hashable, Sendable {
 
     /// Every model the picker may offer, **cheapest first**.
     ///
-    /// Only Gemini models that take audio input and return usable segment
-    /// timestamps belong here. Antigravity also offers models that can't hear
-    /// audio; they are deliberately left out. The picker narrows this list to
-    /// what `agy models` reports for the signed-in account.
+    /// Cleanup only reads and writes text, so the cheapest model is the default.
+    /// The picker narrows this list to what `agy models` reports for the
+    /// signed-in account.
     static let catalog: [TranscriptionModel] = [
         TranscriptionModel(id: "gemini-3.8-flash-low", displayName: "Gemini 3.8 Flash (Low)"),
         TranscriptionModel(id: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)"),

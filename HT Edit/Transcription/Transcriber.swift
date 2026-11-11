@@ -30,23 +30,23 @@ nonisolated enum TranscriptionEvent: Sendable, Equatable {
 /// engine, a few at a time. Results stream back as each chunk finishes.
 ///
 /// - A chunk that fails is retried once, then reported; the other chunks still finish.
-/// - A fatal engine error (not installed, not signed in) ends the whole run.
-/// - Clips transcribed completely are cached by file, model and context.
+/// - A fatal engine error (not set up, helper crashed) ends the whole run.
+/// - Clips transcribed completely are cached by file, language and context.
 nonisolated struct Transcriber: Sendable {
     var engine: any TranscriptionEngine
     var cache: TranscriptCache? = .shared
-    /// Seconds of audio per request. Shorter chunks keep timestamps from drifting.
+    /// Seconds of audio per request when the engine doesn't plan its own chunks.
     var chunkLength: Double = 180
-    /// Requests running at once, so the subscription's rate limits aren't hit.
+    /// Requests in flight at once. Whisper works on one at a time; a second one lets the next chunk export meanwhile.
     var maxConcurrentChunks = 2
     var retries = 1
 
-    func run(_ jobs: [TranscriptionJob], model: String, context: String) -> AsyncThrowingStream<TranscriptionEvent, any Error> {
+    func run(_ jobs: [TranscriptionJob], options: TranscriptionOptions) -> AsyncThrowingStream<TranscriptionEvent, any Error> {
         let transcriber = self
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    try await transcriber.transcribe(jobs, model: model, context: context) { continuation.yield($0) }
+                    try await transcriber.transcribe(jobs, options: options) { continuation.yield($0) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -78,16 +78,17 @@ nonisolated struct Transcriber: Sendable {
     }
 
     @concurrent
-    private func transcribe(_ jobs: [TranscriptionJob], model: String, context: String, emit: @Sendable (TranscriptionEvent) -> Void) async throws {
+    private func transcribe(_ jobs: [TranscriptionJob], options: TranscriptionOptions, emit: @Sendable (TranscriptionEvent) -> Void) async throws {
         var items: [WorkItem] = []
         var progress: [UUID: ClipProgress] = [:]
         for job in jobs {
-            let cacheKey = job.chunks == nil ? TranscriptCache.key(for: job.url, model: model, context: context) : nil
+            let cacheKey = job.chunks == nil ? TranscriptCache.key(for: job.url, options: options) : nil
             if let cache, let cacheKey, let segments = await cache.load(key: cacheKey) {
                 emit(.cached(clipID: job.clipID, segments: segments))
                 continue
             }
-            let chunks = job.chunks ?? TranscriptTimeline.chunks(duration: job.duration, length: chunkLength)
+            let chunks: [Range<Double>]
+            if let retry = job.chunks { chunks = retry } else { chunks = try await planChunks(for: job) }
             guard !chunks.isEmpty else { continue }
             emit(.planned(clipID: job.clipID, chunks: chunks))
             progress[job.clipID] = ClipProgress(remaining: chunks.count, cacheKey: cacheKey)
@@ -96,7 +97,7 @@ nonisolated struct Transcriber: Sendable {
             }
         }
         guard !items.isEmpty else { return }
-        Log.transcription.notice("Transcribing \(items.count) chunk(s) with \(model, privacy: .public)")
+        Log.transcription.notice("Transcribing \(items.count) chunk(s), language \(options.language ?? "auto", privacy: .public)")
 
         let scratch = FileManager.default.temporaryDirectory
             .appending(path: "Transcription-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -107,7 +108,7 @@ nonisolated struct Transcriber: Sendable {
             var queue = items.makeIterator()
             for _ in 0..<max(1, maxConcurrentChunks) {
                 guard let item = queue.next() else { break }
-                group.addTask { try await self.process(item, in: scratch, model: model, context: context) }
+                group.addTask { try await self.process(item, in: scratch, options: options) }
             }
             while let outcome = try await group.next() {
                 switch outcome {
@@ -121,10 +122,22 @@ nonisolated struct Transcriber: Sendable {
                     await finishChunk(of: item.job.clipID, in: &progress)
                 }
                 if let item = queue.next() {
-                    group.addTask { try await self.process(item, in: scratch, model: model, context: context) }
+                    group.addTask { try await self.process(item, in: scratch, options: options) }
                 }
             }
         }
+    }
+
+    /// The engine's own chunks (speech windows) if it plans them, otherwise fixed-length ones.
+    private func planChunks(for job: TranscriptionJob) async throws -> [Range<Double>] {
+        do {
+            if let planned = try await engine.plan(job.url, duration: job.duration) { return planned }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Log.transcription.error("Planning \(job.url.lastPathComponent, privacy: .public) failed, using fixed chunks: \(error.localizedDescription, privacy: .public)")
+        }
+        return TranscriptTimeline.chunks(duration: job.duration, length: chunkLength)
     }
 
     /// Counts a chunk as done and caches the clip once all of its chunks succeeded.
@@ -137,7 +150,7 @@ nonisolated struct Transcriber: Sendable {
     }
 
     /// Exports one chunk and transcribes it, retrying once.
-    private func process(_ item: WorkItem, in scratch: URL, model: String, context: String) async throws -> Outcome {
+    private func process(_ item: WorkItem, in scratch: URL, options: TranscriptionOptions) async throws -> Outcome {
         let audio = scratch.appending(path: item.fileName, directoryHint: .notDirectory)
         defer { try? FileManager.default.removeItem(at: audio) }
         do {
@@ -148,13 +161,13 @@ nonisolated struct Transcriber: Sendable {
         }
 
         let duration = item.chunk.upperBound - item.chunk.lowerBound
-        var lastError: any Error = AgyError.failed("No attempt was made.")
+        var lastError: any Error = WhisperError.failed("No attempt was made.")
         for attempt in 0...max(0, retries) {
             try Task.checkCancellation()
             do {
-                let raw = try await engine.transcribe(audio: audio, duration: duration, model: model, context: context)
+                let raw = try await engine.transcribe(audio: audio, duration: duration, options: options)
                 return .finished(item, TranscriptTimeline.normalize(raw, chunk: item.chunk))
-            } catch let error as AgyError where error.isFatal {
+            } catch let error as any FatalTranscriptionError where error.isFatal {
                 throw error
             } catch is CancellationError {
                 throw CancellationError()

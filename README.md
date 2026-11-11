@@ -22,29 +22,36 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
-- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Whisper transcribes on your Mac; Gemini can proofread the text. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
 
 ## Transcription
 
-Transcription runs through your own **Antigravity CLI (`agy`)**, under your Google account and subscription. There are no API keys, and nothing is charged per request. (Gemini CLI no longer serves individual accounts; Antigravity CLI replaced it.)
+Transcription has two steps. The first runs entirely on your Mac; the second is optional and only ever sees text.
 
-**One-time setup:** install the Antigravity CLI and sign in once with your Google account (run `agy` in Terminal). That's all.
+1. **Whisper (local):** speech to text with timestamps, using Whisper large-v3-turbo through `faster-whisper`. Nothing is uploaded and nothing is charged. It keeps your dialect and every word, and its timestamps come from the audio itself, so they don't drift.
+2. **Gemini cleanup (optional):** your own **Antigravity CLI (`agy`)**, under your Google account and subscription, proofreads Whisper's text. It fixes misheard words and product names (for example "شاتي بيتي" becomes "ChatGPT"). It keeps the speaker's dialect and never rewrites it into formal language. It gets text only, never audio, and it can't change timing: each line keeps Whisper's timestamps, and a corrected line that drops or adds words is rejected in favor of Whisper's version.
 
-**Every time:** everything happens in HT Edit.
-1. Open the **Transcript** tab and press **Transcribe**.
-2. Optional: pick another **model**. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered.
-3. Optional: type **context**, such as names, jargon or spellings. It's empty by default.
+Because Gemini only reads a few kilobytes of text instead of listening to the audio, a run costs far less of your subscription than having Gemini transcribe.
+
+**One-time setup:**
+- **Whisper:** open the **Transcript** tab and press **Set Up Whisper**. It creates a small Python environment and downloads the model (about 1.7 GB) into `~/Library/Application Support/HT Edit/Whisper`. You need Python 3.9–3.13 (for example `brew install python@3.12`). To do the same in Terminal, run `zsh "HT Edit/Transcription/Whisper/whisper_setup.sh"`, and pass an existing large-v3-turbo folder as the second argument to copy it instead of downloading.
+- **Cleanup (optional):** install the Antigravity CLI and sign in once (run `agy` in Terminal). Without it, you still get Whisper's transcript.
+
+**Every time:**
+1. Open the **Transcript** tab and pick the **language** you speak. "Detect automatically" works too, but naming it is more reliable for Arabic.
+2. Optional: type **context**, written the way you talk. It primes Whisper with your topic, dialect and spellings, and the cleanup uses it to get names right.
+3. Press **Transcribe**. Lines appear as Whisper finishes each window, then the cleanup replaces their text.
 
 How it works:
-- Each clip's audio is cut into 3-minute chunks (`.m4a`).
-- HT Edit runs `agy -p … --output-format json --json-schema …` on two chunks at a time.
-- The timestamped segments are placed on the timeline as they arrive.
-- A failed chunk is retried once; anything that still fails can be retried on its own.
-- Finished transcripts are cached per file, model and context.
+- HT Edit measures each clip's loudness and cuts its speech into windows of about 25 seconds, always at pauses. Whisper handles these much better than one long pass, which loops on repeated takes, or short chunks, which lose context.
+- Each window is written as 16 kHz mono WAV and sent to a Whisper helper (`whisper_server.py`). The helper loads the model once per session and returns lines with word-accurate timestamps.
+- When every window is done, the clip's lines go to `agy -p … --output-format json --json-schema …`, 80 lines per request, together with the whole transcript for context.
+- A failed window is retried once; anything that still fails can be retried on its own. If the cleanup fails, Whisper's text stays.
+- Finished transcripts are cached per file, language and context; cleaned versions are cached per model too.
 
-To check your installation by hand, run `zsh scripts/agy-probe.sh`. It runs the exact command HT Edit uses on a short clip with speech.
+To check Antigravity by hand, run `zsh scripts/agy-probe.sh`. It runs the exact cleanup command HT Edit uses.
 
-Running `agy` and reading your sign-in means HT Edit runs **without the App Sandbox**. Distribute it signed and notarized, outside the Mac App Store. Hardened runtime stays on.
+Running Whisper and `agy` means HT Edit runs **without the App Sandbox**. Distribute it signed and notarized, outside the Mac App Store. Hardened runtime stays on.
 
 ## Speed
 
@@ -62,7 +69,7 @@ Running `agy` and reading your sign-in means HT Edit runs **without the App Sand
 | Detection | `Analysis/SilenceDetector.swift`, `Model/ClipTimeline.swift` |
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
-| Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
+| Transcription | `Transcription/Whisper/` (`SpeechWindows.swift` plans windows at pauses, `WhisperEngine.swift` runs `whisper_server.py`, `whisper_setup.sh` installs it), `AgyCleaner.swift` (Gemini cleanup through `agy`, with a guard against dropped words), `Transcriber.swift` (windows, concurrency, retries), `TranscriptionController.swift` (runs Whisper, then cleanup), `TranscriptionEngine.swift`, `TranscriptionModel.swift` (cleanup model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
 | UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.

@@ -7,8 +7,9 @@ import AppKit
 import CoreMedia
 import SwiftUI
 
-/// Inspector tab: pick a model, add optional context, transcribe, and read
-/// the timestamped transcript. Clicking a line jumps the player there.
+/// Inspector tab: set up Whisper once, pick the language, add optional context,
+/// transcribe, and read the timestamped transcript. Clicking a line jumps the
+/// player there. Gemini (through Antigravity) can proofread Whisper's text.
 struct TranscriptPanel: View {
     @Bindable var model: EditorViewModel
 
@@ -18,33 +19,72 @@ struct TranscriptPanel: View {
         @Bindable var transcription = model.transcription
         let segments = model.timelineTranscript
         Form {
-            if let banner = EngineBanner(status: controller.engineStatus) {
+            if let banner = WhisperBanner(status: controller.engineStatus) {
                 Section {
                     banner
+                    if controller.engineStatus == .needsSetup, controller.canSetUp {
+                        if controller.isSettingUp {
+                            HStack {
+                                ProgressView().controlSize(.small)
+                                Text("Setting up Whisper… The first time downloads about 1.7 GB.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Button("Set Up Whisper", systemImage: "arrow.down.circle") {
+                                Task { await controller.setUpWhisper() }
+                            }
+                            .accessibilityIdentifier("setUpWhisperButton")
+                        }
+                    }
+                    if let error = controller.setupError {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
                     Button("Check Again") {
                         Task { await controller.refreshStatus() }
                     }
+                    .disabled(controller.isSettingUp)
                     .accessibilityIdentifier("checkAgainButton")
                 }
             }
 
             Section {
-                Picker("Model", selection: modelSelection) {
-                    ForEach(Array(controller.availableModels.enumerated()), id: \.element.id) { index, option in
-                        Text(index == 0 ? "\(option.displayName) (cheapest)" : option.displayName)
-                            .tag(option.id)
+                Picker("Language", selection: $transcription.language) {
+                    ForEach(TranscriptionController.languages, id: \.name) { option in
+                        Text(option.name).tag(option.code)
                     }
                 }
-                .accessibilityIdentifier("transcriptModelPicker")
+                .accessibilityIdentifier("transcriptLanguagePicker")
 
-                TextField("Context", text: $transcription.context, prompt: Text("Names, terms or spellings (optional)"), axis: .vertical)
+                TextField("Context", text: $transcription.context, prompt: Text("Topic, names, terms, written the way you speak (optional)"), axis: .vertical)
                     .lineLimit(2...5)
                     .accessibilityIdentifier("transcriptContextField")
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Runs on Antigravity with your Google account. Only models that can transcribe audio with timestamps are listed.")
+                Text("Whisper runs on this Mac: nothing is uploaded and nothing is charged. Context written in your own dialect helps it keep that dialect.")
                     .foregroundStyle(.secondary)
+            }
+
+            if controller.hasCleaner {
+                Section {
+                    Toggle("Clean up with Gemini", isOn: $transcription.cleanupEnabled)
+                        .accessibilityIdentifier("transcriptCleanupToggle")
+                    if controller.cleanupEnabled {
+                        Picker("Model", selection: modelSelection) {
+                            ForEach(Array(controller.availableModels.enumerated()), id: \.element.id) { index, option in
+                                Text(index == 0 ? "\(option.displayName) (cheapest)" : option.displayName)
+                                    .tag(option.id)
+                            }
+                        }
+                        .accessibilityIdentifier("transcriptModelPicker")
+                        if let problem = CleanupProblem(status: controller.cleanupStatus) {
+                            problem
+                        }
+                    }
+                } footer: {
+                    Text("Gemini, through Antigravity with your Google account, fixes misheard words and names in Whisper's text. It gets text only, keeps your dialect, and never changes timestamps or drops lines.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -90,13 +130,25 @@ struct TranscriptPanel: View {
                     .accessibilityIdentifier("transcriptProgress")
                 Button("Cancel") { controller.cancel() }
             }
+            if controller.phase == .cleaning {
+                Text("Cleaning up with Gemini…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } else {
             Button(model.timelineTranscript.isEmpty ? "Transcribe" : "Transcribe Again", systemImage: "waveform.and.mic") {
                 controller.transcribe(model.placedClips)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.placedClips.isEmpty || controller.engineStatus == .checking)
+            .disabled(model.placedClips.isEmpty || controller.engineStatus == .checking || controller.engineStatus == .needsSetup)
             .accessibilityIdentifier("transcribeButton")
+        }
+
+        if let note = controller.cleanupNote, !controller.isRunning {
+            Label(note, systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("cleanupNote")
         }
 
         if case .failed(let message) = controller.phase {
@@ -148,42 +200,66 @@ private struct TranscriptRows: View {
     }
 }
 
-/// Explains what to do when Antigravity can't be used yet.
-private struct EngineBanner: View {
+/// Explains what to do when Whisper can't be used yet.
+private struct WhisperBanner: View {
     let title: String
     let message: String
-    let showsInstallLink: Bool
 
     init?(status: EngineStatus) {
         switch status {
-        case .notInstalled:
-            title = "Antigravity CLI isn't installed"
-            message = "Install the Antigravity CLI and sign in once with your Google account. That's the only setup."
-            showsInstallLink = true
-        case .notSignedIn:
-            title = "Sign in to Antigravity"
-            message = "Open Terminal, run agy and sign in with your Google account. You only need to do this once."
-            showsInstallLink = false
+        case .needsSetup:
+            title = "Set up Whisper"
+            message = "Whisper transcribes on this Mac. Setting it up installs a small Python environment and the large-v3-turbo model (about 1.7 GB, once)."
         case .failed(let reason):
-            title = "Antigravity isn't responding"
+            title = "Whisper isn't available"
             message = reason
-            showsInstallLink = false
-        case .unknown, .checking, .ready:
+        case .notInstalled, .notSignedIn, .unknown, .checking, .ready:
             return nil
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: "exclamationmark.triangle.fill")
+            Label(title, systemImage: "waveform.badge.exclamationmark")
                 .font(.headline)
             Text(message)
                 .foregroundStyle(.secondary)
-            if showsInstallLink, let url = URL(string: "https://antigravity.google") {
-                Link("Get Antigravity", destination: url)
-            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("engineBanner")
+    }
+}
+
+/// Explains why Antigravity can't clean up yet; transcription still works without it.
+private struct CleanupProblem: View {
+    let message: String
+    let showsInstallLink: Bool
+
+    init?(status: EngineStatus) {
+        switch status {
+        case .notInstalled:
+            message = "Install the Antigravity CLI and sign in once with your Google account to turn on cleanup."
+            showsInstallLink = true
+        case .notSignedIn:
+            message = "Open Terminal, run agy and sign in with your Google account. You only need to do this once."
+            showsInstallLink = false
+        case .failed(let reason):
+            message = reason
+            showsInstallLink = false
+        case .unknown, .checking, .ready, .needsSetup:
+            return nil
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if showsInstallLink, let url = URL(string: "https://antigravity.google") {
+                Link("Get Antigravity", destination: url).font(.caption)
+            }
+        }
+        .accessibilityIdentifier("cleanupProblem")
     }
 }

@@ -121,7 +121,7 @@ final class EditorViewModel {
     init(
         analyzedClips: [(clip: Clip, levels: AudioLevels)],
         settings: SilenceSettings = .default,
-        transcription: TranscriptionController = TranscriptionController(engine: AgyEngine(), cache: nil, defaults: nil)
+        transcription: TranscriptionController = TranscriptionController(engine: WhisperEngine(), cache: nil, defaults: nil)
     ) {
         self.analyzer = AudioLevelAnalyzer(cache: nil)
         self.transcription = transcription

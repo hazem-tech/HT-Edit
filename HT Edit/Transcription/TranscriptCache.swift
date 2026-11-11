@@ -3,6 +3,7 @@
 //  HT Edit
 //
 
+import CryptoKit
 import Foundation
 
 /// Finished transcripts on disk, so transcribing a file again with the same
@@ -12,8 +13,8 @@ actor TranscriptCache {
         directory: URL.cachesDirectory.appending(path: "Transcripts", directoryHint: .isDirectory)
     )
 
-    /// Bump when the prompt or the stored format changes.
-    nonisolated static let formatVersion = 1
+    /// Bump when the transcription pipeline or the stored format changes.
+    nonisolated static let formatVersion = 2
 
     let directory: URL
 
@@ -21,9 +22,21 @@ actor TranscriptCache {
         self.directory = directory
     }
 
-    nonisolated static func key(for url: URL, model: String, context: String) -> String? {
+    /// Whisper's transcript of a file with these options.
+    nonisolated static func key(for url: URL, options: TranscriptionOptions) -> String? {
+        let context = options.context.trimmingCharacters(in: .whitespacesAndNewlines)
+        return FileCacheKey.key(for: url, salt: "transcript|whisper-\(WhisperInstallation.modelName)|\(options.language ?? "auto")|\(context)|\(formatVersion)")
+    }
+
+    /// The proofread version of exactly `raw`, by `model` with `context`.
+    nonisolated static func cleanupKey(for url: URL, raw: [TranscriptSegment], model: String, context: String) -> String? {
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileCacheKey.key(for: url, salt: "transcript|\(model)|\(context)|\(formatVersion)")
+        let text = raw.map(\.text).joined(separator: "\n")
+        return FileCacheKey.key(for: url, salt: "cleanup|\(model)|\(context)|\(formatVersion)|\(Self.digest(text))")
+    }
+
+    private nonisolated static func digest(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     func load(key: String) -> [TranscriptSegment]? {

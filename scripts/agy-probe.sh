@@ -1,15 +1,16 @@
 #!/bin/zsh
 # Checks that the installed Antigravity CLI can do what HT Edit asks of it:
-# headless mode, JSON output, model choice, and hearing an audio file.
+# headless mode, JSON output, model choice, and proofreading transcript lines
+# without dropping words or changing the dialect.
 #
 # Run once on your Mac, after installing agy and signing in:
 #   zsh scripts/agy-probe.sh [model]
 #
 # It runs the same command HT Edit runs (see AgyCommand in
-# "HT Edit/Transcription/AgyEngine.swift"); keep the two in sync.
+# "HT Edit/Transcription/AgyCleaner.swift"); keep the two in sync.
 
 set -u
-model="${1:-gemini-3.1-flash-lite}"
+model="${1:-gemini-3.8-flash-low}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -27,25 +28,22 @@ if ! "$agy" models; then
   exit 1
 fi
 
-echo "\n== Making a test clip with speech =="
-say -o "$work/probe.aiff" "Hello from H T Edit. This is the second sentence."
-afconvert -f m4af -d aac "$work/probe.aiff" "$work/chunk-1.m4a"
-rm "$work/probe.aiff"
-echo "✓ $work/chunk-1.m4a"
+schema='{"type":"object","properties":{"lines":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"text":{"type":"string"}},"required":["id","text"]}}},"required":["lines"]}'
+prompt='You are proofreading an automatic speech-to-text transcript. A speech recognizer wrote each line below; each has an id.
+Fix only words the recognizer clearly misheard, using the meaning of the surrounding lines, the whole transcript and the context.
+Rules:
+- Keep the speaker'"'"'s own dialect and wording. If they speak a dialect (for example Egyptian Arabic), keep that dialect: never rewrite it into the standard or formal language, and never make it more formal.
+- Never drop, summarize, shorten, merge, split, reorder or add anything. Repeated words, false starts and filler stay. Every input line gets exactly one output line with the same id.
+- When the speaker says an English word or a product name, write it the usual way in Latin letters (for example ChatGPT, Gemini, privacy), even inside an Arabic line.
+- If a line is already right, or you aren'"'"'t sure, return it unchanged.
+- Don'"'"'t run commands, and don'"'"'t read or change any files.
+Lines to proofread (JSON):
+[{"id":0,"text":"لو انت مهتم قوي بالخصوصية والبرايفيسي"},{"id":1,"text":"فدي حاجة لازم تعملها على شاتي بيتي"}]
+Reply only with JSON of the form {"lines":[{"id":0,"text":"..."}]}.'
 
-schema='{"type":"object","properties":{"segments":{"type":"array","items":{"type":"object","properties":{"start":{"type":"number"},"end":{"type":"number"},"text":{"type":"string"}},"required":["start","end","text"]}}},"required":["segments"]}'
-prompt="Transcribe the speech in the audio file @chunk-1.m4a verbatim, in the language that is spoken.
-The file is 4.0 seconds long.
-Split the speech into short segments at sentence or phrase boundaries, each at most about 10 seconds.
-For each segment give start and end in seconds from the beginning of this file, and the text.
-If there is no speech, return an empty list.
-Only read that file: don't run commands or change any files.
-Reply only with JSON of the form {\"segments\":[{\"start\":0.0,\"end\":2.5,\"text\":\"...\"}]}."
-
-echo "\n== Transcribing with $model (what HT Edit runs) =="
+echo "\n== Proofreading two lines with $model (what HT Edit runs) =="
 cd "$work"
 "$agy" -p "$prompt" --output-format json --json-schema "$schema" --model "$model" --print-timeout 300s
 status=$?
 echo "\n(exit status $status)"
-echo "\nExpected: JSON with two segments, \"Hello from HT Edit.\" then \"This is the second sentence.\", with increasing start times."
-echo "If the reply says it can't hear or open the file, send this whole output to the HT Edit developer."
+echo "\nExpected: JSON with lines 0 and 1, still in Egyptian Arabic, with \"شاتي بيتي\" written as ChatGPT."
