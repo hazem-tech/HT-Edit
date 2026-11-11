@@ -9,8 +9,9 @@ import Observation
 
 /// Owns transcripts and the transcription run for the clips on the timeline.
 ///
-/// Each clip goes through the same fixed steps; the user only gives an optional context:
-/// 1. **Main pass:** Whisper on this Mac, in Arabic, without any context. Each clip's speech
+/// Each clip goes through the same fixed steps; the user picks the language (Arabic by
+/// default, or English) and can give an optional context:
+/// 1. **Main pass:** Whisper on this Mac, in that language, without any context. Each clip's speech
 ///    is cut into windows of about 25 seconds at pauses, and lines appear as windows finish.
 ///    Without a context, Whisper writes every word and every repeated take, in the speaker's
 ///    dialect. This is the transcript the user gets; the later steps only correct its words.
@@ -36,8 +37,8 @@ final class TranscriptionController {
         case failed(String)
     }
 
-    /// The spoken language. Fixed: HT Edit is tuned for Arabic (English words inside it are kept).
-    nonisolated static let language = "ar"
+    /// Spoken languages offered. Arabic keeps English words inside it as spoken.
+    nonisolated static let languages: [(code: String, name: String)] = [("ar", "Arabic"), ("en", "English")]
 
     // MARK: State
 
@@ -66,6 +67,11 @@ final class TranscriptionController {
     /// Topic, names, terms or spellings, written the way the speaker talks. Empty by
     /// default; when empty, Gemini works one out from the rough transcript.
     var context = ""
+
+    /// The spoken language (a Whisper code from `languages`), remembered across launches. Arabic by default.
+    var language: String {
+        didSet { defaults?.set(language, forKey: Self.languageDefaultsKey) }
+    }
 
     /// The user's cleanup model, remembered across launches. `nil` means the cheapest available.
     var preferredModelID: String? {
@@ -126,6 +132,7 @@ final class TranscriptionController {
     /// Chunks that failed in the current pass (for progress).
     private var failedInPass = 0
     private static let modelDefaultsKey = "transcriptionModel"
+    private static let languageDefaultsKey = "transcriptionLanguage"
 
     /// - Parameters:
     ///   - cleaner: works out the topic and proofreads Whisper's text; `nil` gives one plain Whisper pass.
@@ -146,6 +153,8 @@ final class TranscriptionController {
         self.transcriber = Transcriber(engine: engine, cache: cache, chunkLength: chunkLength)
         self.defaults = defaults
         self.preferredModelID = defaults?.string(forKey: Self.modelDefaultsKey)
+        let saved = defaults?.string(forKey: Self.languageDefaultsKey)
+        self.language = Self.languages.contains { $0.code == saved } ? saved! : "ar"
     }
 
     /// The controller the app uses: local Whisper plus Antigravity, or a fake for UI tests.
@@ -241,6 +250,7 @@ final class TranscriptionController {
         passesDone = 0
         passCount = jobs.count * (cleaner == nil ? 1 : 2)
         let userContext = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        let language = language
 
         runTask = Task {
             if case .ready = engineStatus {} else { await refreshStatus() }
@@ -257,9 +267,9 @@ final class TranscriptionController {
             do {
                 for job in jobs {
                     if cleaner == nil {
-                        _ = try await whisperPass(job, options: TranscriptionOptions(language: Self.language, context: userContext))
+                        _ = try await whisperPass(job, options: TranscriptionOptions(language: language, context: userContext))
                     } else {
-                        try await process(job, userContext: userContext)
+                        try await process(job, userContext: userContext, language: language)
                     }
                     try Task.checkCancellation()
                 }
@@ -277,8 +287,8 @@ final class TranscriptionController {
     }
 
     /// Rough pass, topic, context pass and cleanup for one clip.
-    private func process(_ job: TranscriptionJob, userContext: String) async throws {
-        let rough = try await whisperPass(job, options: TranscriptionOptions(language: Self.language))
+    private func process(_ job: TranscriptionJob, userContext: String, language: String) async throws {
+        let rough = try await whisperPass(job, options: TranscriptionOptions(language: language))
         try Task.checkCancellation()
 
         var context = userContext
@@ -292,7 +302,7 @@ final class TranscriptionController {
             return
         }
 
-        let primed = try await whisperPass(job, options: TranscriptionOptions(language: Self.language, context: context), shown: false)
+        let primed = try await whisperPass(job, options: TranscriptionOptions(language: language, context: context), shown: false)
         try Task.checkCancellation()
         guard transcripts[job.clipID] != nil else { return }   // removed meanwhile
         transcripts[job.clipID] = TranscriptTimeline.attachingAlternatives(from: primed, to: rough)

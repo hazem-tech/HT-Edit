@@ -328,6 +328,23 @@ struct TranscriptionControllerTests {
         #expect(controller.transcripts.values.first?.map(\.text) == ["words"], "the rough pass is the transcript; the context pass is only a second reading")
     }
 
+    @Test func languageDefaultsToArabicAndEnglishIsRemembered() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "language-\(UUID().uuidString)"))
+        let controller = TranscriptionController(engine: ScriptedEngine(), cache: nil, defaults: defaults)
+        #expect(controller.language == "ar")
+        controller.language = "en"
+        #expect(TranscriptionController(engine: ScriptedEngine(), cache: nil, defaults: defaults).language == "en")
+
+        let directory = makeTemporaryDirectory("controller-english")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let engine = ScriptedEngine()
+        let english = TranscriptionController(engine: engine, cleaner: ScriptedCleaner { $0 }, cache: nil, defaults: defaults)
+        english.transcribe([Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))])
+        #expect(await waitUntil { english.phase == .finished })
+        #expect(engine.calls.allSatisfy { $0.options.language == "en" }, "both Whisper passes use the chosen language")
+    }
+
     @Test func aGivenContextIsUsedAsIs() async throws {
         let directory = makeTemporaryDirectory("controller-context")
         defer { try? FileManager.default.removeItem(at: directory) }

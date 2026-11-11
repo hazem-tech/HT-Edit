@@ -32,6 +32,7 @@ struct RealTranscriptionTests {
         let duration = try await AVURLAsset(url: url).load(.duration)
         let controller = TranscriptionController(engine: WhisperEngine(), cleaner: AgyCleaner(), cache: nil, defaults: nil)
         controller.context = environment["HTEDIT_REAL_CONTEXT"] ?? ""
+        if let language = environment["HTEDIT_REAL_LANGUAGE"] { controller.language = language }
         let clip = Clip(url: url, duration: duration)
 
         let clock = ContinuousClock()

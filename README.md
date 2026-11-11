@@ -26,14 +26,14 @@ The clips are test videos the app generates itself: solid green frames, with a t
 
 ## Transcription
 
-Transcription is tuned for **Arabic speech** (English words inside it are kept as spoken) and its steps are fixed. The only thing you give it is an optional **context**.
+Pick the **language**: **Arabic** (the default; English words inside it are kept as spoken) or **English**. You can also give an optional **context**. Everything else is fixed:
 
 1. **Main pass, on your Mac:** Whisper large-v3-turbo (`faster-whisper`) transcribes the speech without any hint. Without a hint, Whisper writes every word and every repeated take, in your dialect. This is the transcript you get, and its timestamps come from the audio, so they don't drift. Lines appear as each part finishes.
 2. **Topic:** if the context field is empty, Gemini reads that transcript and writes a one-line context in your dialect, the way a person would skim it first. For example: "فيديو بالعامية المصرية عن ميزة الوضع الخفي في ChatGPT والـ privacy". It's shown under the field as **Topic found**.
 3. **Context pass, on your Mac:** Whisper again, with the context as a hint. It gets names and terms right, like ChatGPT, but it tends to skip repeated takes and make speech formal, so it's never shown. It only serves as a second reading of each line.
 4. **Cleanup:** Gemini, through your own **Antigravity CLI (`agy`)** under your Google account and subscription, proofreads the main transcript with the second reading beside every line. It fixes misheard words and names and keeps your dialect. It gets text only, never audio, and it can't change timing: each line keeps Whisper's timestamps, and a corrected line that drops or adds words is rejected in favor of Whisper's version. Repeats and false starts stay.
 
-Gemini only reads text, a few calls per clip, so a run costs much less of your subscription than having Gemini listen to the audio.
+Gemini only reads text, a few calls per clip, so a run costs much less of your subscription than having Gemini listen to the audio. (Having Gemini listen through `agy` also stopped working with Antigravity CLI 1.5.5: in headless mode it tries to run `ffprobe` or Python on the file instead of hearing it, and returns nothing.)
 
 On a 5½-minute Egyptian Arabic test video, with the context left empty, about 84% of the words matched a hand-checked transcript (Whisper alone: 65%), and every repeated take was kept. The whole run took about 5 minutes on an M1.
 
@@ -41,7 +41,7 @@ On a 5½-minute Egyptian Arabic test video, with the context left empty, about 8
 - **Whisper:** open the **Transcript** tab and press **Set Up Whisper**. It creates a small Python environment and downloads the model (about 1.7 GB) into `~/Library/Application Support/HT Edit/Whisper`. You need Python 3.9–3.13 (for example `brew install python@3.12`). To do the same in Terminal, run `zsh "HT Edit/Transcription/Whisper/whisper_setup.sh"`, and pass an existing large-v3-turbo folder as the second argument to copy it instead of downloading.
 - **Antigravity:** install the Antigravity CLI and sign in once (run `agy` in Terminal). Without it, you get the main Whisper pass only.
 
-**Every time:** open the **Transcript** tab, optionally type a context (topic, names, terms, written the way you talk), and press **Transcribe**.
+**Every time:** open the **Transcript** tab, check the language, optionally type a context (topic, names, terms, written the way you talk), and press **Transcribe**. The language is remembered.
 
 How it works:
 - HT Edit measures each clip's loudness and cuts its speech into windows of about 25 seconds, always at pauses. Whisper handles these much better than one long pass, which loops on repeated takes, or short chunks, which lose context.

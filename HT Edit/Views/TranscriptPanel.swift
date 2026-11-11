@@ -48,6 +48,14 @@ struct TranscriptPanel: View {
             }
 
             Section {
+                Picker("Language", selection: $transcription.language) {
+                    ForEach(TranscriptionController.languages, id: \.code) { option in
+                        Text(option.name).tag(option.code)
+                    }
+                }
+                .disabled(controller.isRunning)
+                .accessibilityIdentifier("transcriptLanguagePicker")
+
                 TextField("Context", text: $transcription.context, prompt: Text("Optional: topic, names, terms, the way you say them"), axis: .vertical)
                     .lineLimit(2...5)
                     .accessibilityIdentifier("transcriptContextField")
@@ -73,7 +81,7 @@ struct TranscriptPanel: View {
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Arabic speech, with English words kept as spoken. Whisper transcribes on this Mac, twice: without and with the context. Gemini, through Antigravity with your Google account, works out the topic when the context is empty and fixes misheard words. It keeps your dialect and never changes timestamps or drops lines.")
+                Text("Arabic keeps English words as spoken. Whisper transcribes on this Mac, twice: without and with the context. Gemini, through Antigravity with your Google account, works out the topic when the context is empty and fixes misheard words. It keeps your dialect and never changes timestamps or drops lines.")
                     .foregroundStyle(.secondary)
             }
 
