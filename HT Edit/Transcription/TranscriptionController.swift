@@ -67,6 +67,12 @@ final class TranscriptionController {
         didSet { defaults?.set(language, forKey: Self.languageDefaultsKey) }
     }
 
+    /// Whether Whisper reads each window twice (with and without the context) so the
+    /// cleanup can recover dialect words; about twice as slow. Remembered across launches.
+    var secondPass: Bool {
+        didSet { defaults?.set(secondPass, forKey: Self.secondPassDefaultsKey) }
+    }
+
     /// Whether Gemini proofreads Whisper's text, remembered across launches.
     var cleanupEnabled: Bool {
         didSet { defaults?.set(cleanupEnabled, forKey: Self.cleanupDefaultsKey) }
@@ -120,6 +126,7 @@ final class TranscriptionController {
     private static let modelDefaultsKey = "transcriptionModel"
     private static let languageDefaultsKey = "transcriptionLanguage"
     private static let cleanupDefaultsKey = "transcriptionCleanup"
+    private static let secondPassDefaultsKey = "transcriptionSecondPass"
 
     /// - Parameters:
     ///   - cleaner: proofreads Whisper's text; `nil` skips that step.
@@ -142,6 +149,7 @@ final class TranscriptionController {
         self.preferredModelID = defaults?.string(forKey: Self.modelDefaultsKey)
         self.language = defaults?.string(forKey: Self.languageDefaultsKey)
         self.cleanupEnabled = defaults?.object(forKey: Self.cleanupDefaultsKey) as? Bool ?? true
+        self.secondPass = defaults?.object(forKey: Self.secondPassDefaultsKey) as? Bool ?? true
     }
 
     /// The controller the app uses: local Whisper plus Antigravity cleanup, or a fake for UI tests.
@@ -233,7 +241,8 @@ final class TranscriptionController {
         guard !jobs.isEmpty else { return }
         phase = .running
         let wanted = Set(jobs.map(\.clipID))
-        let options = TranscriptionOptions(language: language, context: context)
+        // The second pass only helps the cleanup, and only differs from the first when there's a context.
+        let options = TranscriptionOptions(language: language, context: context, secondPass: secondPass && cleanupEnabled && cleaner != nil)
 
         runTask = Task {
             if case .ready = engineStatus {} else { await refreshStatus() }
@@ -288,7 +297,7 @@ final class TranscriptionController {
                 continue
             }
             do {
-                let corrected = try await cleaner.clean(raw.map(\.text), model: model, context: context)
+                let corrected = try await cleaner.clean(raw.map { CleanupLine($0.text, alternative: $0.alternative) }, model: model, context: context)
                 // The clip may have been removed or re-run meanwhile.
                 guard transcripts[job.clipID] == raw else { continue }
                 let cleaned = Self.applying(corrected, to: raw)
@@ -310,7 +319,7 @@ final class TranscriptionController {
     nonisolated static func applying(_ corrected: [String?], to raw: [TranscriptSegment]) -> [TranscriptSegment] {
         raw.enumerated().map { index, segment in
             guard index < corrected.count, let text = corrected[index] else { return segment }
-            return TranscriptSegment(start: segment.start, end: segment.end, text: text)
+            return TranscriptSegment(start: segment.start, end: segment.end, text: text, alternative: segment.alternative)
         }
     }
 

@@ -9,7 +9,7 @@ import Testing
 
 struct AgyCommandTests {
 
-    private let lines: [(id: Int, text: String)] = [(0, "لو انت مهتم قوي بالخصوصية"), (1, "على شاتي بيتي")]
+    private let lines: [(id: Int, line: CleanupLine)] = [(0, CleanupLine("لو انت مهتم قوي بالخصوصية")), (1, CleanupLine("هذا هو الوضع الخافي", alternative: "ده هو الوضع الخافي"))]
 
     @Test func cleanupCommandIsHeadlessJSONWithTheChosenModel() throws {
         let arguments = AgyCommand.cleanup(lines: lines, reference: "", model: "gemini-3.8-flash-low", context: "", timeout: .seconds(300))
@@ -28,6 +28,8 @@ struct AgyCommandTests {
         #expect(prompt.contains("Never drop"))
         #expect(!prompt.contains("Context from the user"))
         #expect(!prompt.contains("for reference only"))
+        #expect(prompt.contains(#""alt":"ده هو الوضع الخافي""#), "the second reading goes with its line")
+        #expect(prompt.contains("second recognition"))
         #expect(!prompt.contains("@"), "cleanup never attaches files")
 
         let withContext = AgyCommand.prompt(lines: lines, reference: "all of it", context: "ChatGPT, الوضع الخفي")
@@ -110,7 +112,7 @@ struct AgyCleanerProcessTests {
         defer { fake.remove() }
 
         let cleaner = AgyCleaner(executable: fake.url)
-        let result = try await cleaner.clean(["على شاتي بيتي", "الوضع الخافي ده هو", "بس كده"], model: "gemini-x", context: "ChatGPT")
+        let result = try await cleaner.clean(["على شاتي بيتي", "الوضع الخافي ده هو", "بس كده"].map { CleanupLine($0) }, model: "gemini-x", context: "ChatGPT")
         #expect(result == ["على ChatGPT", nil, nil], "line 1 lost words, line 2 wasn't returned")
 
         let arguments = try fake.log("args").split(separator: "\0").map(String.init)
@@ -139,7 +141,7 @@ struct AgyCleanerProcessTests {
         let cleaner = AgyCleaner(executable: fake.url)
         #expect(await cleaner.checkStatus() == .notSignedIn)
         await #expect(throws: AgyError.notSignedIn) {
-            try await cleaner.clean(["x"], model: "m", context: "")
+            try await cleaner.clean([CleanupLine("x")], model: "m", context: "")
         }
     }
 
@@ -150,7 +152,7 @@ struct AgyCleanerProcessTests {
         """#)
         defer { fake.remove() }
         await #expect(throws: AgyError.failed("model gemini-x is not available")) {
-            try await AgyCleaner(executable: fake.url).clean(["x"], model: "gemini-x", context: "")
+            try await AgyCleaner(executable: fake.url).clean([CleanupLine("x")], model: "gemini-x", context: "")
         }
     }
 

@@ -8,8 +8,13 @@ Started by HT Edit (WhisperServer.swift) with the venv's Python:
 It loads faster-whisper once, prints {"ready": true} and then answers one JSON
 request per stdin line with one JSON reply per stdout line:
 
-    -> {"id": 1, "wav": "/path/window.wav", "language": "ar", "prompt": "..."}
-    <- {"id": 1, "segments": [{"start": 0.0, "end": 2.1, "text": "..."}]}
+    -> {"id": 1, "wav": "/path/window.wav", "language": "ar", "prompt": "...", "second_pass": true}
+    <- {"id": 1, "segments": [{"start": 0.0, "end": 2.1, "text": "...", "alternative": "..."}]}
+
+With `second_pass`, the window is transcribed again without the prompt. The
+prompt helps with names and topic but pushes Whisper toward formal language;
+the plain pass keeps more of the speaker's dialect. Each line gets the plain
+pass's words for the same moment as `alternative`, for the cleanup to weigh.
     <- {"id": 1, "error": "..."}
 
 `wav` must be 16 kHz mono 16-bit PCM (HT Edit writes it). HT Edit already cut
@@ -57,6 +62,17 @@ def read_wav(path):
             raise ValueError("expected 16 kHz mono 16-bit WAV")
         data = w.readframes(w.getnframes())
     return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def attach_alternatives(lines, words):
+    """Gives each line the second pass's words that fall in its time span."""
+    for line in lines:
+        picked = [w["text"] for w in words
+                  if line["start"] - 0.15 <= (w["start"] + w["end"]) / 2 <= line["end"] + 0.15]
+        alternative = " ".join(picked)
+        if alternative and alternative != line["text"]:
+            line["alternative"] = alternative
+    return lines
 
 
 def lines_from_words(words):
@@ -138,7 +154,12 @@ def transcribe(model, request):
         retry = run_whisper(model, audio, language, attempt_prompt, strict=strict)
         if not looks_looped(retry) or strict:
             words = retry if not looks_looped(retry) else words
-    return lines_from_words(words)
+    lines = lines_from_words(words)
+    if request.get("second_pass") and prompt:
+        plain = run_whisper(model, audio, language, None, strict=False)
+        if not looks_looped(plain):
+            attach_alternatives(lines, plain)
+    return lines
 
 
 def main():

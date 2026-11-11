@@ -29,7 +29,10 @@ struct RealTranscriptionTests {
     @Test func transcribesAndCleansARealFile() async throws {
         let url = URL(filePath: try #require(realFile))
         let duration = try await AVURLAsset(url: url).load(.duration).seconds
-        let options = TranscriptionOptions(language: environment["HTEDIT_REAL_LANGUAGE"], context: environment["HTEDIT_REAL_CONTEXT"] ?? "")
+        let options = TranscriptionOptions(
+            language: environment["HTEDIT_REAL_LANGUAGE"], context: environment["HTEDIT_REAL_CONTEXT"] ?? "",
+            secondPass: environment["HTEDIT_REAL_SECOND_PASS"] != "0"
+        )
 
         let engine = WhisperEngine()
         #expect(await engine.checkStatus() == .ready([]), "Set up Whisper first")
@@ -55,7 +58,7 @@ struct RealTranscriptionTests {
         var cleanupTime: Duration = .zero
         if case .ready(let models) = await cleaner.checkStatus(), let model = models.first {
             let cleanStart = clock.now
-            let corrected = try await cleaner.clean(raw.map(\.text), model: model.id, context: options.context)
+            let corrected = try await cleaner.clean(raw.map { CleanupLine($0.text, alternative: $0.alternative) }, model: model.id, context: options.context)
             cleaned = TranscriptionController.applying(corrected, to: raw)
             cleanupTime = clock.now - cleanStart
             #expect(cleaned.map(\.start) == raw.map(\.start), "cleanup never moves timestamps")
@@ -66,7 +69,10 @@ struct RealTranscriptionTests {
 
         let out = FileManager.default.temporaryDirectory
         func write(_ segments: [TranscriptSegment], _ name: String) throws -> URL {
-            let text = segments.map { String(format: "[%7.2f – %7.2f] ", $0.start, $0.end) + $0.text }.joined(separator: "\n")
+            let text = segments.map { segment in
+                String(format: "[%7.2f – %7.2f] ", segment.start, segment.end) + segment.text
+                    + (name.contains("whisper") ? segment.alternative.map { "   ‖ alt: " + $0 } ?? "" : "")
+            }.joined(separator: "\n")
             let file = out.appending(path: name)
             try text.write(to: file, atomically: true, encoding: .utf8)
             return file

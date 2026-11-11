@@ -77,6 +77,9 @@ struct TranscriptPanel: View {
                             }
                         }
                         .accessibilityIdentifier("transcriptModelPicker")
+                        Toggle("Second Whisper pass", isOn: $transcription.secondPass)
+                            .help("Whisper reads each part again without your context. Gemini compares both readings, which brings back dialect words the context made formal. About twice as slow.")
+                            .accessibilityIdentifier("transcriptSecondPassToggle")
                         if let problem = CleanupProblem(status: controller.cleanupStatus) {
                             problem
                         }

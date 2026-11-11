@@ -80,9 +80,10 @@ final class ScriptedCleaner: TranscriptCleaner {
 
     func checkStatus() async -> EngineStatus { status }
 
-    func clean(_ lines: [String], model: String, context: String) async throws -> [String?] {
-        state.withLock { $0.append(lines) }
-        return try reply(lines)
+    func clean(_ lines: [CleanupLine], model: String, context: String) async throws -> [String?] {
+        let texts = lines.map(\.text)
+        state.withLock { $0.append(texts) }
+        return try reply(texts)
     }
 }
 

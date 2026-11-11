@@ -45,6 +45,7 @@ Because Gemini only reads a few kilobytes of text instead of listening to the au
 How it works:
 - HT Edit measures each clip's loudness and cuts its speech into windows of about 25 seconds, always at pauses. Whisper handles these much better than one long pass, which loops on repeated takes, or short chunks, which lose context.
 - Each window is written as 16 kHz mono WAV and sent to a Whisper helper (`whisper_server.py`). The helper loads the model once per session and returns lines with word-accurate timestamps.
+- With **Second Whisper pass** on (the default), each window is transcribed twice: with your context, which gets names and terms right, and without it, which keeps more of your dialect. The cleanup sees both readings of every line and picks per word. This takes about twice as long. On a 5½-minute Egyptian Arabic test video, it raised agreement with a hand-checked transcript from 77% to 84% of words.
 - When every window is done, the clip's lines go to `agy -p … --output-format json --json-schema …`, 80 lines per request, together with the whole transcript for context.
 - A failed window is retried once; anything that still fails can be retried on its own. If the cleanup fails, Whisper's text stays.
 - Finished transcripts are cached per file, language and context; cleaned versions are cached per model too.

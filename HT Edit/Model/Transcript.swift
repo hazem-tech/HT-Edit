@@ -10,6 +10,9 @@ nonisolated struct TranscriptSegment: Codable, Sendable, Equatable {
     var start: Double
     var end: Double
     var text: String
+    /// Whisper's second, unprompted reading of the same moment, when it differs.
+    /// Only the cleanup uses it; it's never shown.
+    var alternative: String? = nil
 }
 
 /// A transcript line placed on the timeline, ready to display.
@@ -58,7 +61,7 @@ nonisolated enum TranscriptTimeline {
                 guard !text.isEmpty, segment.start.isFinite, segment.end.isFinite, segment.start < length else { return nil }
                 let start = max(0, segment.start)
                 let end = min(max(start, segment.end), length)
-                return TranscriptSegment(start: chunk.lowerBound + start, end: chunk.lowerBound + end, text: text)
+                return TranscriptSegment(start: chunk.lowerBound + start, end: chunk.lowerBound + end, text: text, alternative: segment.alternative)
             }
             .sorted { $0.start < $1.start }
     }

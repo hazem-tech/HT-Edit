@@ -66,7 +66,7 @@ nonisolated enum AgyCommand {
     /// model knows what the whole clip is about.
     static let referenceLimit = 12_000
 
-    static func cleanup(lines: [(id: Int, text: String)], reference: String, model: String, context: String, timeout: Duration) -> [String] {
+    static func cleanup(lines: [(id: Int, line: CleanupLine)], reference: String, model: String, context: String, timeout: Duration) -> [String] {
         [
             "-p", prompt(lines: lines, reference: reference, context: context),
             "--output-format", "json",
@@ -76,17 +76,22 @@ nonisolated enum AgyCommand {
         ]
     }
 
-    static func prompt(lines: [(id: Int, text: String)], reference: String, context: String) -> String {
+    static func prompt(lines: [(id: Int, line: CleanupLine)], reference: String, context: String) -> String {
+        let hasAlternatives = lines.contains { $0.line.alternative != nil }
         var parts = [
             "You are proofreading an automatic speech-to-text transcript. A speech recognizer wrote each line below; each has an id.",
             "Fix only words the recognizer clearly misheard, using the meaning of the surrounding lines, the whole transcript and the context.",
             "Rules:",
             "- Keep the speaker's own dialect and wording. If they speak a dialect (for example Egyptian Arabic), keep that dialect: never rewrite it into the standard or formal language, and never make it more formal.",
             "- Never drop, summarize, shorten, merge, split, reorder or add anything. Repeated words, false starts and filler stay. Every input line gets exactly one output line with the same id.",
+            "- Recognizers often turn dialect into the formal language. When the speaker clearly talks in a dialect, write the dialect words they said instead of formal ones the recognizer substituted (in Egyptian Arabic for example ده not هذا, اللي not الذي, لازم not يجب أن, بدل not بدلاً, التلات not الثلاث, نقط not نقاط), keeping the same number of words.",
             "- When the speaker says an English word or a product name, write it the usual way in Latin letters (for example ChatGPT, Gemini, privacy), even inside an Arabic line.",
             "- If a line is already right, or you aren't sure, return it unchanged.",
             "- Don't run commands, and don't read or change any files.",
         ]
+        if hasAlternatives {
+            parts.append("Some lines have \"alt\": a second recognition of the same audio made without the context. It is often closer to the speaker's dialect but worse at names and terms. Per word, choose what the speaker most likely said; the output must still cover the whole line.")
+        }
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         if !context.isEmpty {
             parts.append("Context from the user (names, terms, spellings, topic): \(context)")
@@ -95,10 +100,10 @@ nonisolated enum AgyCommand {
         if !reference.isEmpty {
             parts.append("The whole transcript, for reference only (don't return it):\n\(String(reference.prefix(referenceLimit)))")
         }
-        struct Payload: Encodable { var id: Int; var text: String }
+        struct Payload: Encodable { var id: Int; var text: String; var alt: String? }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
-        let json = (try? encoder.encode(lines.map { Payload(id: $0.id, text: $0.text) }))
+        let json = (try? encoder.encode(lines.map { Payload(id: $0.id, text: $0.line.text, alt: $0.line.alternative) }))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         parts.append("Lines to proofread (JSON):\n\(json)")
         parts.append(#"Reply only with JSON of the form {"lines":[{"id":0,"text":"..."}]}."#)
@@ -235,10 +240,10 @@ actor AgyCleaner: TranscriptCleaner {
         }
     }
 
-    func clean(_ lines: [String], model: String, context: String) async throws -> [String?] {
+    func clean(_ lines: [CleanupLine], model: String, context: String) async throws -> [String?] {
         guard let agy = await executable() else { throw AgyError.notInstalled }
         guard !lines.isEmpty else { return [] }
-        let reference = lines.joined(separator: "\n")
+        let reference = lines.map(\.text).joined(separator: "\n")
         // agy needs a working folder; give it an empty one so it can't see anything else.
         let folder = FileManager.default.temporaryDirectory.appending(path: "cleanup-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -254,7 +259,7 @@ actor AgyCleaner: TranscriptCleaner {
             )
             let reply = try await run(agy, arguments: arguments, in: folder)
             for line in reply where ids.contains(line.id) {
-                result[line.id] = CleanupGuard.accept(original: lines[line.id], corrected: line.text)
+                result[line.id] = CleanupGuard.accept(original: lines[line.id].text, corrected: line.text)
             }
         }
         return result

@@ -29,10 +29,14 @@ nonisolated struct TranscriptionOptions: Sendable, Hashable {
     var language: String?
     /// Names, terms or spellings; also primes Whisper with the speaker's style.
     var context: String
+    /// Transcribe each window a second time without the context, so the cleanup
+    /// can see wording the context pushed toward formal language. About twice as slow.
+    var secondPass: Bool
 
-    init(language: String? = nil, context: String = "") {
+    init(language: String? = nil, context: String = "", secondPass: Bool = false) {
         self.language = language
         self.context = context
+        self.secondPass = secondPass
     }
 }
 
@@ -53,9 +57,21 @@ nonisolated protocol FatalTranscriptionError: Error {
     var isFatal: Bool { get }
 }
 
+/// A transcript line to proofread.
+nonisolated struct CleanupLine: Sendable, Equatable {
+    var text: String
+    /// Another reading of the same audio (Whisper's unprompted pass), if any.
+    var alternative: String?
+
+    init(_ text: String, alternative: String? = nil) {
+        self.text = text
+        self.alternative = alternative
+    }
+}
+
 /// Proofreads transcript lines without touching their timing.
 nonisolated protocol TranscriptCleaner: Sendable {
     func checkStatus() async -> EngineStatus
     /// Corrected text per line, in the same order. A `nil` entry keeps that line as it is.
-    func clean(_ lines: [String], model: String, context: String) async throws -> [String?]
+    func clean(_ lines: [CleanupLine], model: String, context: String) async throws -> [String?]
 }

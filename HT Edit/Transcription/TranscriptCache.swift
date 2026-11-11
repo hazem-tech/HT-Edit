@@ -14,7 +14,7 @@ actor TranscriptCache {
     )
 
     /// Bump when the transcription pipeline or the stored format changes.
-    nonisolated static let formatVersion = 2
+    nonisolated static let formatVersion = 3
 
     let directory: URL
 
@@ -25,13 +25,13 @@ actor TranscriptCache {
     /// Whisper's transcript of a file with these options.
     nonisolated static func key(for url: URL, options: TranscriptionOptions) -> String? {
         let context = options.context.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileCacheKey.key(for: url, salt: "transcript|whisper-\(WhisperInstallation.modelName)|\(options.language ?? "auto")|\(context)|\(formatVersion)")
+        return FileCacheKey.key(for: url, salt: "transcript|whisper-\(WhisperInstallation.modelName)|\(options.language ?? "auto")|\(context)|\(options.secondPass)|\(formatVersion)")
     }
 
     /// The proofread version of exactly `raw`, by `model` with `context`.
     nonisolated static func cleanupKey(for url: URL, raw: [TranscriptSegment], model: String, context: String) -> String? {
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = raw.map(\.text).joined(separator: "\n")
+        let text = raw.map { $0.text + "|" + ($0.alternative ?? "") }.joined(separator: "\n")
         return FileCacheKey.key(for: url, salt: "cleanup|\(model)|\(context)|\(formatVersion)|\(Self.digest(text))")
     }
 
