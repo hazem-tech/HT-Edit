@@ -22,7 +22,8 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
-- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Then press **Delete** (⌘⌫). Playback skips the deleted words, and they're shown struck through in the transcript and in purple on the waveform. Select deleted words and press **Restore** to put them back, or use **Restore All**.
 
 ## Transcription
 
@@ -41,6 +42,19 @@ How it works:
 - The timestamped segments are placed on the timeline as they arrive.
 - A failed chunk is retried once; anything that still fails can be retried on its own.
 - Finished transcripts are cached per file, model and context.
+
+### Word timing
+
+Gemini gets the words right, but it only guesses when each word was said. To cut single words cleanly, HT Edit measures word times on the audio itself, using **forced alignment**. The text is already known, so the aligner only has to find where each word sits in the waveform. It uses Meta's MMS alignment model, which covers 1,100+ languages, Arabic included, and listens in 20 ms frames.
+
+**One-time setup:** install [uv](https://docs.astral.sh/uv/): `brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`. That's all. On the first transcription, uv downloads its own private Python, PyTorch and the model (about 1.5–2 GB) into its cache. It never uses or changes the Python on your Mac. Later runs work offline. Without uv, word times are estimated from each line's time (shown with a dotted underline).
+
+How cuts are placed:
+- Word times from an aligner are good to a few tens of milliseconds. In connected speech, and especially in Arabic, there often isn't an exact boundary between two words anyway.
+- So a cut doesn't sit on a word's edge. It moves to the **quietest 10 ms** in the pause before the first deleted word, and again in the pause after the last one. The join then falls where there's the least sound to break, and there's no crossfade.
+- When the deleted words run straight into their neighbors with no pause, the cut still goes to the quietest point it can find.
+
+To check word timing by hand, run `zsh scripts/align-probe.sh`. It runs the exact command HT Edit uses (`uv run --script align.py …`) on a short spoken clip.
 
 To check your installation by hand, run `zsh scripts/agy-probe.sh`. It runs the exact command HT Edit uses on a short clip with speech.
 
@@ -63,6 +77,7 @@ Running `agy` and reading your sign-in means HT Edit runs **without the App Sand
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
 | Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
+| Word timing and cuts | `Transcription/WordAligner.swift` (runs `align.py` through `uv`), `Transcription/align.py` (MMS forced alignment), `Model/TranscriptWords.swift`, `Model/WordCuts.swift` (cuts snapped to the quietest point of each pause) |
 | UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.

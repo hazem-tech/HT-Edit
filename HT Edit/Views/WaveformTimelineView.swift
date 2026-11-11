@@ -80,6 +80,7 @@ struct WaveformTimelineView: View {
             WaveformCanvas(
                 lanes: model.lanes,
                 silences: model.silences,
+                cuts: model.cutRanges,
                 thresholdDB: model.settings.thresholdDB,
                 offset: scrollOffset,
                 pixelsPerSecond: scale

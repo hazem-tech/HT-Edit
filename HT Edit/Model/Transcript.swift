@@ -10,6 +10,19 @@ nonisolated struct TranscriptSegment: Codable, Sendable, Equatable {
     var start: Double
     var end: Double
     var text: String
+    /// Each word of `text` with its time, measured on the audio by the word
+    /// aligner. `nil` when the line wasn't aligned: the words are then spread
+    /// over the line (see `TranscriptWords.evenlySpread`) and marked approximate.
+    var words: [TranscriptWord]? = nil
+}
+
+/// One word of a transcript line. Times are seconds within its clip.
+nonisolated struct TranscriptWord: Codable, Sendable, Equatable {
+    var start: Double
+    var end: Double
+    var text: String
+    /// `true` when the time is an estimate rather than measured on the audio.
+    var isApproximate = false
 }
 
 /// A transcript line placed on the timeline, ready to display.
@@ -20,6 +33,22 @@ nonisolated struct TimelineSegment: Sendable, Equatable, Identifiable {
     var start: Double
     var end: Double
     var text: String
+    var words: [TimelineWord] = []
+}
+
+/// A word placed on the timeline.
+nonisolated struct TimelineWord: Sendable, Equatable, Identifiable {
+    /// Stable while the clip's transcript stays the same, even as other chunks arrive.
+    var id: String
+    var clipID: UUID
+    /// Timeline position, in seconds.
+    var start: Double
+    var end: Double
+    /// Position within the clip, in seconds.
+    var clipStart: Double
+    var clipEnd: Double
+    var text: String
+    var isApproximate: Bool
 }
 
 /// Pure helpers for transcripts: chunk planning, cleaning up model output,
@@ -77,12 +106,28 @@ nonisolated enum TranscriptTimeline {
         var clipStart = 0.0
         for clip in clips {
             for (index, segment) in (transcripts[clip.id] ?? []).enumerated() where segment.start < clip.duration {
+                let words = (segment.words ?? TranscriptWords.evenlySpread(segment))
+                    .filter { $0.start < clip.duration }
+                    .map { word in
+                        let end = min(word.end, clip.duration)
+                        return TimelineWord(
+                            id: TranscriptWords.id(clipID: clip.id, word: word),
+                            clipID: clip.id,
+                            start: clipStart + word.start,
+                            end: clipStart + end,
+                            clipStart: word.start,
+                            clipEnd: end,
+                            text: word.text,
+                            isApproximate: word.isApproximate
+                        )
+                    }
                 result.append(TimelineSegment(
                     id: "\(clip.id.uuidString)-\(index)",
                     clipID: clip.id,
                     start: clipStart + segment.start,
                     end: clipStart + min(segment.end, clip.duration),
-                    text: segment.text
+                    text: segment.text,
+                    words: words
                 ))
             }
             clipStart += clip.duration

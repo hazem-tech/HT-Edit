@@ -21,9 +21,16 @@ actor TranscriptCache {
         self.directory = directory
     }
 
-    nonisolated static func key(for url: URL, model: String, context: String) -> String? {
+    /// Word timing of transcripts with measured word times. Bump when the aligner changes.
+    nonisolated static let alignedWordTiming = "words-mms-1"
+
+    /// - Parameter wordTiming: how word times were found: empty when they're
+    ///   estimated, `alignedWordTiming` when they're measured. Installing the
+    ///   aligner later then transcribes again instead of keeping estimates.
+    nonisolated static func key(for url: URL, model: String, context: String, wordTiming: String = "") -> String? {
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileCacheKey.key(for: url, salt: "transcript|\(model)|\(context)|\(formatVersion)")
+        let timing = wordTiming.isEmpty ? "" : "|\(wordTiming)"
+        return FileCacheKey.key(for: url, salt: "transcript|\(model)|\(context)|\(formatVersion)\(timing)")
     }
 
     func load(key: String) -> [TranscriptSegment]? {

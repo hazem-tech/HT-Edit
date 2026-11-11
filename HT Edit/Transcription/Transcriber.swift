@@ -24,6 +24,8 @@ nonisolated enum TranscriptionEvent: Sendable, Equatable {
     case planned(clipID: UUID, chunks: [Range<Double>])
     case chunkFinished(clipID: UUID, chunk: Range<Double>, segments: [TranscriptSegment])
     case chunkFailed(clipID: UUID, chunk: Range<Double>, message: String)
+    /// The chunk's text is in, but its word times couldn't be measured: they're estimated.
+    case wordTimingFailed(clipID: UUID, chunk: Range<Double>, message: String)
 }
 
 /// Splits clips into chunks, exports each chunk's audio and sends it to the
@@ -31,6 +33,8 @@ nonisolated enum TranscriptionEvent: Sendable, Equatable {
 ///
 /// - A chunk that fails is retried once, then reported; the other chunks still finish.
 /// - A fatal engine error (not installed, not signed in) ends the whole run.
+/// - With an aligner, each chunk's lines then get measured word times. If that
+///   fails the text is kept and its word times are estimated.
 /// - Clips transcribed completely are cached by file, model and context.
 nonisolated struct Transcriber: Sendable {
     var engine: any TranscriptionEngine
@@ -40,6 +44,8 @@ nonisolated struct Transcriber: Sendable {
     /// Requests running at once, so the subscription's rate limits aren't hit.
     var maxConcurrentChunks = 2
     var retries = 1
+    /// Measures word times; `nil` estimates them from each line's time.
+    var aligner: (any WordAligner)? = nil
 
     func run(_ jobs: [TranscriptionJob], model: String, context: String) -> AsyncThrowingStream<TranscriptionEvent, any Error> {
         let transcriber = self
@@ -65,7 +71,7 @@ nonisolated struct Transcriber: Sendable {
     }
 
     private enum Outcome: Sendable {
-        case finished(WorkItem, [TranscriptSegment])
+        case finished(WorkItem, [TranscriptSegment], wordTimingError: String?)
         case failed(WorkItem, String)
     }
 
@@ -74,15 +80,20 @@ nonisolated struct Transcriber: Sendable {
         var remaining: Int
         var segments: [TranscriptSegment] = []
         var hasFailure = false
+        /// Some words were meant to be measured but are estimated: don't cache.
+        var hasEstimatedWords = false
         var cacheKey: String?
     }
 
     @concurrent
     private func transcribe(_ jobs: [TranscriptionJob], model: String, context: String, emit: @Sendable (TranscriptionEvent) -> Void) async throws {
+        let aligner = await usableAligner()
+        let wordTiming = aligner == nil ? "" : TranscriptCache.alignedWordTiming
+
         var items: [WorkItem] = []
         var progress: [UUID: ClipProgress] = [:]
         for job in jobs {
-            let cacheKey = job.chunks == nil ? TranscriptCache.key(for: job.url, model: model, context: context) : nil
+            let cacheKey = job.chunks == nil ? TranscriptCache.key(for: job.url, model: model, context: context, wordTiming: wordTiming) : nil
             if let cache, let cacheKey, let segments = await cache.load(key: cacheKey) {
                 emit(.cached(clipID: job.clipID, segments: segments))
                 continue
@@ -107,13 +118,19 @@ nonisolated struct Transcriber: Sendable {
             var queue = items.makeIterator()
             for _ in 0..<max(1, maxConcurrentChunks) {
                 guard let item = queue.next() else { break }
-                group.addTask { try await self.process(item, in: scratch, model: model, context: context) }
+                group.addTask { try await self.process(item, in: scratch, model: model, context: context, aligner: aligner) }
             }
             while let outcome = try await group.next() {
                 switch outcome {
-                case .finished(let item, let segments):
+                case .finished(let item, let segments, let wordTimingError):
+                    if let wordTimingError {
+                        emit(.wordTimingFailed(clipID: item.job.clipID, chunk: item.chunk, message: wordTimingError))
+                    }
                     emit(.chunkFinished(clipID: item.job.clipID, chunk: item.chunk, segments: segments))
                     progress[item.job.clipID]?.segments += segments
+                    if aligner != nil, segments.contains(where: { $0.words == nil }) {
+                        progress[item.job.clipID]?.hasEstimatedWords = true
+                    }
                     await finishChunk(of: item.job.clipID, in: &progress)
                 case .failed(let item, let message):
                     emit(.chunkFailed(clipID: item.job.clipID, chunk: item.chunk, message: message))
@@ -121,10 +138,21 @@ nonisolated struct Transcriber: Sendable {
                     await finishChunk(of: item.job.clipID, in: &progress)
                 }
                 if let item = queue.next() {
-                    group.addTask { try await self.process(item, in: scratch, model: model, context: context) }
+                    group.addTask { try await self.process(item, in: scratch, model: model, context: context, aligner: aligner) }
                 }
             }
         }
+    }
+
+    /// The aligner, if it's ready to run.
+    private func usableAligner() async -> (any WordAligner)? {
+        guard let aligner else { return nil }
+        let status = await aligner.checkStatus()
+        guard status == .ready else {
+            Log.transcription.notice("Word times are estimated: aligner is \(String(describing: status), privacy: .public)")
+            return nil
+        }
+        return aligner
     }
 
     /// Counts a chunk as done and caches the clip once all of its chunks succeeded.
@@ -132,12 +160,12 @@ nonisolated struct Transcriber: Sendable {
         guard var clip = progress[clipID] else { return }
         clip.remaining -= 1
         progress[clipID] = clip
-        guard clip.remaining == 0, !clip.hasFailure, let cache, let key = clip.cacheKey else { return }
+        guard clip.remaining == 0, !clip.hasFailure, !clip.hasEstimatedWords, let cache, let key = clip.cacheKey else { return }
         await cache.store(clip.segments.sorted { $0.start < $1.start }, key: key)
     }
 
-    /// Exports one chunk and transcribes it, retrying once.
-    private func process(_ item: WorkItem, in scratch: URL, model: String, context: String) async throws -> Outcome {
+    /// Exports one chunk and transcribes it, retrying once, then measures its word times.
+    private func process(_ item: WorkItem, in scratch: URL, model: String, context: String, aligner: (any WordAligner)?) async throws -> Outcome {
         let audio = scratch.appending(path: item.fileName, directoryHint: .notDirectory)
         defer { try? FileManager.default.removeItem(at: audio) }
         do {
@@ -153,7 +181,8 @@ nonisolated struct Transcriber: Sendable {
             try Task.checkCancellation()
             do {
                 let raw = try await engine.transcribe(audio: audio, duration: duration, model: model, context: context)
-                return .finished(item, TranscriptTimeline.normalize(raw, chunk: item.chunk))
+                let segments = TranscriptTimeline.normalize(raw, chunk: item.chunk)
+                return try await withWordTimes(segments, of: item, in: scratch, aligner: aligner)
             } catch let error as AgyError where error.isFatal {
                 throw error
             } catch is CancellationError {
@@ -164,5 +193,21 @@ nonisolated struct Transcriber: Sendable {
             }
         }
         return .failed(item, lastError.localizedDescription)
+    }
+
+    /// `segments` with measured word times. An aligner failure keeps the text
+    /// (word times are then estimated) and reports why.
+    private func withWordTimes(_ segments: [TranscriptSegment], of item: WorkItem, in scratch: URL, aligner: (any WordAligner)?) async throws -> Outcome {
+        guard let aligner, !segments.isEmpty else { return .finished(item, segments, wordTimingError: nil) }
+        do {
+            let aligned = try await aligner.align(segments, in: item.job.url, chunk: item.chunk, scratch: scratch)
+            return .finished(item, aligned, wordTimingError: nil)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            Log.transcription.error("Word timing for \(item.fileName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return .finished(item, segments, wordTimingError: error.localizedDescription)
+        }
     }
 }
