@@ -104,7 +104,7 @@ actor WhisperEngine: TranscriptionEngine {
         let server = self.server ?? WhisperServer(python: installation.python, script: script, model: installation.model)
         self.server = server
         do {
-            return try await server.transcribe(wav: wav, language: options.language, prompt: options.context, secondPass: options.secondPass)
+            return try await server.transcribe(wav: wav, language: options.language, prompt: options.context)
         } catch let error as WhisperError where error.isFatal {
             self.server = nil   // start a fresh helper next time
             throw error
@@ -132,7 +132,7 @@ actor WhisperServer {
         self.model = model
     }
 
-    func transcribe(wav: URL, language: String?, prompt: String, secondPass: Bool) async throws -> [TranscriptSegment] {
+    func transcribe(wav: URL, language: String?, prompt: String) async throws -> [TranscriptSegment] {
         try await start()
         let id = nextID
         nextID += 1
@@ -140,7 +140,7 @@ actor WhisperServer {
         if let language { request["language"] = language }
         let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prompt.isEmpty { request["prompt"] = prompt }
-        let line = try Self.encode(id: id, request, secondPass: secondPass) + "\n"
+        let line = try Self.encode(id: id, request) + "\n"
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -256,15 +256,14 @@ actor WhisperServer {
         var error: String?
     }
 
-    private static func encode(id: Int, _ fields: [String: String], secondPass: Bool) throws -> String {
+    private static func encode(id: Int, _ fields: [String: String]) throws -> String {
         struct Request: Encodable {
             var id: Int
             var wav: String
             var language: String?
             var prompt: String?
-            var second_pass: Bool
         }
-        let request = Request(id: id, wav: fields["wav"] ?? "", language: fields["language"], prompt: fields["prompt"], second_pass: secondPass)
+        let request = Request(id: id, wav: fields["wav"] ?? "", language: fields["language"], prompt: fields["prompt"])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
         return String(decoding: try encoder.encode(request), as: UTF8.self)

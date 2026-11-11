@@ -5,14 +5,23 @@
 
 import Foundation
 
+/// One timed word of a transcript line. Times are seconds within its clip.
+nonisolated struct TimedWord: Codable, Sendable, Equatable {
+    var start: Double
+    var end: Double
+    var text: String
+}
+
 /// One timed line of a transcript. Times are seconds within its clip.
 nonisolated struct TranscriptSegment: Codable, Sendable, Equatable {
     var start: Double
     var end: Double
     var text: String
-    /// Whisper's second, unprompted reading of the same moment, when it differs.
+    /// Whisper's other reading of the same moment (without the context), when it differs.
     /// Only the cleanup uses it; it's never shown.
     var alternative: String? = nil
+    /// Whisper's words with their times, when known.
+    var words: [TimedWord]? = nil
 }
 
 /// A transcript line placed on the timeline, ready to display.
@@ -61,7 +70,11 @@ nonisolated enum TranscriptTimeline {
                 guard !text.isEmpty, segment.start.isFinite, segment.end.isFinite, segment.start < length else { return nil }
                 let start = max(0, segment.start)
                 let end = min(max(start, segment.end), length)
-                return TranscriptSegment(start: chunk.lowerBound + start, end: chunk.lowerBound + end, text: text, alternative: segment.alternative)
+                let words = segment.words?.map {
+                    TimedWord(start: chunk.lowerBound + $0.start, end: chunk.lowerBound + $0.end, text: $0.text)
+                }
+                return TranscriptSegment(start: chunk.lowerBound + start, end: chunk.lowerBound + end, text: text,
+                                         alternative: segment.alternative, words: words)
             }
             .sorted { $0.start < $1.start }
     }
@@ -71,6 +84,21 @@ nonisolated enum TranscriptTimeline {
     static func merging(_ segments: [TranscriptSegment], into existing: [TranscriptSegment], chunk: Range<Double>) -> [TranscriptSegment] {
         let kept = existing.filter { !chunk.contains($0.start) }
         return (kept + segments).sorted { $0.start < $1.start }
+    }
+
+    /// `lines` with each line's `alternative` set to the words of `other` (another
+    /// reading of the same audio) spoken during that line, when they differ.
+    static func attachingAlternatives(from other: [TranscriptSegment], to lines: [TranscriptSegment]) -> [TranscriptSegment] {
+        let words = other.flatMap { $0.words ?? [] }
+        return lines.map { line in
+            var line = line
+            let picked = words
+                .filter { word in (line.start - 0.15)...(line.end + 0.15) ~= (word.start + word.end) / 2 }
+                .map(\.text)
+                .joined(separator: " ")
+            line.alternative = picked.isEmpty || picked == line.text ? nil : picked
+            return line
+        }
     }
 
     /// Places each clip's segments at the clip's position on the timeline.

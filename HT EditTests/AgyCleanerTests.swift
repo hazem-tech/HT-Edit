@@ -26,14 +26,14 @@ struct AgyCommandTests {
         #expect(prompt.contains(#""text":"لو انت مهتم قوي بالخصوصية""#) && prompt.contains(#""id":1"#))
         #expect(prompt.contains("keep that dialect"))
         #expect(prompt.contains("Never drop"))
-        #expect(!prompt.contains("Context from the user"))
+        #expect(!prompt.contains("Context ("))
         #expect(!prompt.contains("for reference only"))
         #expect(prompt.contains(#""alt":"ده هو الوضع الخافي""#), "the second reading goes with its line")
-        #expect(prompt.contains("second recognition"))
+        #expect(prompt.contains("second recognition of the same moment"))
         #expect(!prompt.contains("@"), "cleanup never attaches files")
 
         let withContext = AgyCommand.prompt(lines: lines, reference: "all of it", context: "ChatGPT, الوضع الخفي")
-        #expect(withContext.contains("Context from the user"))
+        #expect(withContext.contains("Context ("))
         #expect(withContext.contains("ChatGPT, الوضع الخفي"))
         #expect(withContext.contains("all of it"))
     }
@@ -47,6 +47,17 @@ struct AgyCommandTests {
         #expect(!custom.contains("Rules:"))
         #expect(custom.contains("Lines to proofread (JSON)"), "lines and reply format are always added")
         #expect(custom.contains("Reply only with JSON"))
+    }
+
+    @Test func topicCommandAsksForAShortContextInTheSpeakersDialect() throws {
+        let arguments = AgyCommand.topic(lines: ["على شاتي بيتي", "الوضع الخافي"], model: "gemini-x", timeout: .seconds(60))
+        let prompt = try #require(value(after: "-p", in: arguments))
+        #expect(prompt.contains("على شاتي بيتي"))
+        #expect(prompt.contains("same language and dialect"))
+        #expect(value(after: "--model", in: arguments) == "gemini-x")
+        #expect(try AgyOutputParser.topic(from: #"{"status":"SUCCESS","structured_output":{"context":" فيديو عن ChatGPT "}}"#) == "فيديو عن ChatGPT")
+        #expect(try AgyOutputParser.topic(from: #"{"status":"SUCCESS","response":"```json\n{\"context\":\"x\"}\n```"}"#) == "x")
+        #expect(try AgyOutputParser.topic(from: #"{"status":"SUCCESS","structured_output":{"context":"{\"context\":\"فيديو عن ChatGPT\"}"}}"#) == "فيديو عن ChatGPT", "JSON nested in the field is unwrapped")
     }
 
     @Test func savedInstructionsWinAndEmptyOnesFallBackToTheDefault() throws {

@@ -7,12 +7,10 @@
 //  set up and takes minutes:
 //
 //    TEST_RUNNER_HTEDIT_REAL_FILE=/path/video.mp4 \
-//    TEST_RUNNER_HTEDIT_REAL_LANGUAGE=ar \
-//    TEST_RUNNER_HTEDIT_REAL_CONTEXT="…" \
+//    TEST_RUNNER_HTEDIT_REAL_CONTEXT="…"   (optional; empty like the app's default) \
 //    xcodebuild test -scheme "HT Edit" -only-testing:"HT EditTests/RealTranscriptionTests"
 //
-//  It writes the Whisper and cleaned transcripts next to the system temp folder
-//  (paths are printed) so you can compare them.
+//  It writes the finished transcript to the system temp folder (the path is printed).
 //
 
 import AVFoundation
@@ -26,60 +24,30 @@ private let realFile = environment["HTEDIT_REAL_FILE"]
 @Suite(.enabled(if: realFile != nil, "Set HTEDIT_REAL_FILE to run"), .timeLimit(.minutes(30)))
 struct RealTranscriptionTests {
 
+    /// The app's own pipeline (TranscriptionController with Whisper and agy), on a real file.
+    /// The context comes from HTEDIT_REAL_CONTEXT and is empty by default, like in the app.
+    @MainActor
     @Test func transcribesAndCleansARealFile() async throws {
         let url = URL(filePath: try #require(realFile))
-        let duration = try await AVURLAsset(url: url).load(.duration).seconds
-        let options = TranscriptionOptions(
-            language: environment["HTEDIT_REAL_LANGUAGE"], context: environment["HTEDIT_REAL_CONTEXT"] ?? "",
-            secondPass: environment["HTEDIT_REAL_SECOND_PASS"] != "0"
-        )
+        let duration = try await AVURLAsset(url: url).load(.duration)
+        let controller = TranscriptionController(engine: WhisperEngine(), cleaner: AgyCleaner(), cache: nil, defaults: nil)
+        controller.context = environment["HTEDIT_REAL_CONTEXT"] ?? ""
+        let clip = Clip(url: url, duration: duration)
 
-        let engine = WhisperEngine()
-        #expect(await engine.checkStatus() == .ready([]), "Set up Whisper first")
         let clock = ContinuousClock()
         let start = clock.now
-        let transcriber = Transcriber(engine: engine, cache: nil)
-        var raw: [TranscriptSegment] = []
-        var windows = 0
-        for try await event in transcriber.run([TranscriptionJob(clipID: UUID(), url: url, duration: duration, chunks: nil)], options: options) {
-            switch event {
-            case .planned(_, let chunks): windows = chunks.count
-            case .chunkFinished(_, let chunk, let segments): raw = TranscriptTimeline.merging(segments, into: raw, chunk: chunk)
-            case .chunkFailed(_, let chunk, let message): Issue.record("Window \(chunk) failed: \(message)")
-            case .cached: break
-            }
-        }
-        let whisperTime = clock.now - start
-        #expect(!raw.isEmpty)
-        #expect(zip(raw, raw.dropFirst()).allSatisfy { $0.start <= $1.start }, "lines are in order")
+        controller.transcribe([clip])
+        #expect(await waitUntil(timeout: .seconds(1800)) { !controller.isRunning && controller.phase != .idle })
+        #expect(controller.phase == .finished)
+        let lines = controller.transcripts[clip.id] ?? []
+        #expect(!lines.isEmpty)
+        #expect(zip(lines, lines.dropFirst()).allSatisfy { $0.start <= $1.start }, "lines are in order")
 
-        let cleaner = AgyCleaner()
-        var cleaned = raw
-        var cleanupTime: Duration = .zero
-        if case .ready(let models) = await cleaner.checkStatus(), let model = models.first {
-            let cleanStart = clock.now
-            let corrected = try await cleaner.clean(raw.map { CleanupLine($0.text, alternative: $0.alternative) }, model: model.id, context: options.context)
-            cleaned = TranscriptionController.applying(corrected, to: raw)
-            cleanupTime = clock.now - cleanStart
-            #expect(cleaned.map(\.start) == raw.map(\.start), "cleanup never moves timestamps")
-            print("Cleanup with \(model.id) changed \(corrected.compactMap { $0 }.count) of \(raw.count) lines in \(cleanupTime)")
-        } else {
-            print("Antigravity isn't ready: cleanup skipped")
-        }
-
-        let out = FileManager.default.temporaryDirectory
-        func write(_ segments: [TranscriptSegment], _ name: String) throws -> URL {
-            let text = segments.map { segment in
-                String(format: "[%7.2f – %7.2f] ", segment.start, segment.end) + segment.text
-                    + (name.contains("whisper") ? segment.alternative.map { "   ‖ alt: " + $0 } ?? "" : "")
-            }.joined(separator: "\n")
-            let file = out.appending(path: name)
-            try text.write(to: file, atomically: true, encoding: .utf8)
-            return file
-        }
-        let rawFile = try write(raw, "htedit-real-whisper.txt")
-        let cleanFile = try write(cleaned, "htedit-real-cleaned.txt")
-        print("Whisper: \(windows) windows, \(raw.count) lines in \(whisperTime) → \(rawFile.path)")
-        print("Cleaned → \(cleanFile.path)")
+        let text = lines.map { String(format: "[%7.2f – %7.2f] ", $0.start, $0.end) + $0.text }.joined(separator: "\n")
+        let file = FileManager.default.temporaryDirectory.appending(path: "htedit-real-cleaned.txt")
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        print("Topic found: \(controller.detectedContext ?? "(none)")")
+        if let note = controller.cleanupNote { print("Note: \(note)") }
+        print("\(lines.count) lines in \(clock.now - start) → \(file.path)")
     }
 }

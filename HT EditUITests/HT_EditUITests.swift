@@ -128,8 +128,8 @@ final class HT_EditUITests: XCTestCase {
 
     // MARK: Transcript
 
-    /// With the fake transcriber (no Whisper setup needed): the Transcript tab
-    /// detects the language by default with an empty context, and Transcribe fills in rows.
+    /// With the fake transcriber (no Whisper setup needed): the Transcript tab has an
+    /// empty context by default, and Transcribe fills in rows.
     @MainActor
     func testTranscribeFillsInTimestampedRows() throws {
         let app = launchWithFixture("h264Landscape", extraArguments: ["-UITestFakeTranscription", "1"])
@@ -139,11 +139,6 @@ final class HT_EditUITests: XCTestCase {
         let tab = [app.radioButtons["Transcript"], app.buttons["Transcript"]].first { $0.waitForExistence(timeout: 2) }
         expect(tab != nil, "Transcript tab not found", app)
         tab?.click()
-
-        let picker = app.descendants(matching: .any).matching(identifier: "transcriptLanguagePicker").firstMatch
-        expect(picker.waitForExistence(timeout: 5), "Language picker not found", app)
-        let pickerValue = (picker.value as? String) ?? picker.label
-        expect(pickerValue.contains("Detect automatically"), "Language should default to detecting it, shows \(pickerValue)", app)
 
         let context = app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch
         expect(context.waitForExistence(timeout: 5), "Context field not found", app)

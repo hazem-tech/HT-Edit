@@ -14,7 +14,7 @@ actor TranscriptCache {
     )
 
     /// Bump when the transcription pipeline or the stored format changes.
-    nonisolated static let formatVersion = 3
+    nonisolated static let formatVersion = 4
 
     let directory: URL
 
@@ -25,7 +25,7 @@ actor TranscriptCache {
     /// Whisper's transcript of a file with these options.
     nonisolated static func key(for url: URL, options: TranscriptionOptions) -> String? {
         let context = options.context.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileCacheKey.key(for: url, salt: "transcript|whisper-\(WhisperInstallation.modelName)|\(options.language ?? "auto")|\(context)|\(options.secondPass)|\(formatVersion)")
+        return FileCacheKey.key(for: url, salt: "transcript|whisper-\(WhisperInstallation.modelName)|\(options.language ?? "auto")|\(context)|\(formatVersion)")
     }
 
     /// The proofread version of exactly `raw`, by `model` with `context`.
@@ -33,6 +33,11 @@ actor TranscriptCache {
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = raw.map { $0.text + "|" + ($0.alternative ?? "") }.joined(separator: "\n")
         return FileCacheKey.key(for: url, salt: "cleanup|\(model)|\(context)|\(formatVersion)|\(Self.digest(text))|\(Self.digest(instructions))")
+    }
+
+    /// The topic Gemini worked out from exactly this rough transcript.
+    nonisolated static func topicKey(for url: URL, rough: [TranscriptSegment], model: String) -> String? {
+        FileCacheKey.key(for: url, salt: "topic|\(model)|\(formatVersion)|\(Self.digest(rough.map(\.text).joined(separator: "\n")))")
     }
 
     private nonisolated static func digest(_ text: String) -> String {

@@ -85,6 +85,14 @@ final class ScriptedCleaner: TranscriptCleaner {
         state.withLock { $0.append(texts) }
         return try reply(texts)
     }
+
+    private let topics = Mutex<[[String]]>([])
+    var topicCalls: [[String]] { topics.withLock { $0 } }
+
+    func topic(of lines: [String], model: String) async throws -> String {
+        topics.withLock { $0.append(lines) }
+        return "الموضوع"
+    }
 }
 
 @Suite(.timeLimit(.minutes(1)))
@@ -299,17 +307,51 @@ struct TranscriptionControllerTests {
         #expect(controller.cleanupNote?.contains("Not cleaned up") == true)
     }
 
-    @Test func cleanupCanBeTurnedOff() async throws {
-        let directory = makeTemporaryDirectory("controller-cleanup-off")
+    @Test func emptyContextLetsGeminiFindTheTopicForTheSecondPass() async throws {
+        let directory = makeTemporaryDirectory("controller-topic")
         defer { try? FileManager.default.removeItem(at: directory) }
         let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let engine = ScriptedEngine()
         let cleaner = ScriptedCleaner { $0 }
-        let controller = TranscriptionController(engine: ScriptedEngine(), cleaner: cleaner, cache: nil, defaults: nil, chunkLength: 3)
-        controller.cleanupEnabled = false
+        let controller = TranscriptionController(engine: engine, cleaner: cleaner, cache: nil, defaults: nil, chunkLength: 3)
+        #expect(controller.context.isEmpty, "the context is empty by default")
 
         controller.transcribe([Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))])
         #expect(await waitUntil { controller.phase == .finished })
-        #expect(cleaner.calls.isEmpty)
+        #expect(cleaner.topicCalls == [["words"]], "the topic comes from the rough pass")
+        #expect(engine.calls.map(\.options) == [
+            TranscriptionOptions(language: "ar", context: ""),
+            TranscriptionOptions(language: "ar", context: "الموضوع"),
+        ], "rough pass without context, then a pass primed with the topic, always in Arabic")
+        #expect(controller.detectedContext == "الموضوع")
+        #expect(cleaner.calls.count == 1)
+        #expect(controller.transcripts.values.first?.map(\.text) == ["words"], "the rough pass is the transcript; the context pass is only a second reading")
+    }
+
+    @Test func aGivenContextIsUsedAsIs() async throws {
+        let directory = makeTemporaryDirectory("controller-context")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let engine = ScriptedEngine()
+        let cleaner = ScriptedCleaner { $0 }
+        let controller = TranscriptionController(engine: engine, cleaner: cleaner, cache: nil, defaults: nil, chunkLength: 3)
+        controller.context = "ChatGPT"
+
+        controller.transcribe([Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))])
+        #expect(await waitUntil { controller.phase == .finished })
+        #expect(cleaner.topicCalls.isEmpty)
+        #expect(engine.calls.map(\.options.context) == ["", "ChatGPT"])
+        #expect(controller.detectedContext == nil)
+    }
+
+    @Test func secondReadingIsAttachedByTime() {
+        let rough = [TranscriptSegment(start: 0, end: 2, text: "ده هو", words: [
+            TimedWord(start: 0, end: 0.5, text: "ده"), TimedWord(start: 0.6, end: 1, text: "هو"), TimedWord(start: 2.5, end: 3, text: "بعدين"),
+        ])]
+        let primed = [TranscriptSegment(start: 0, end: 1.2, text: "هذا هو"), TranscriptSegment(start: 2.4, end: 3.1, text: "بعدين")]
+        let attached = TranscriptTimeline.attachingAlternatives(from: rough, to: primed)
+        #expect(attached.map(\.alternative) == ["ده هو", nil], "the same words aren't repeated as an alternative")
+        #expect(attached.map(\.start) == [0, 2.4])
     }
 
     @Test func removingAClipDropsItsTranscript() async throws {

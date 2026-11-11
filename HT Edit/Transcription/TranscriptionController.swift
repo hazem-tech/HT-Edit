@@ -9,74 +9,63 @@ import Observation
 
 /// Owns transcripts and the transcription run for the clips on the timeline.
 ///
-/// A run has two steps:
-/// 1. **Whisper**, on this Mac: each clip's speech is cut into windows of about
-///    25 seconds at pauses and transcribed with word-accurate timestamps.
-///    Lines appear as each window finishes.
-/// 2. **Cleanup**, optional: Gemini through Antigravity proofreads the text
-///    (misheard words, product names) while keeping the speaker's dialect.
-///    It sees text only and can't change timing; lines it would shorten or
-///    drop keep Whisper's version.
+/// Each clip goes through the same fixed steps; the user only gives an optional context:
+/// 1. **Main pass:** Whisper on this Mac, in Arabic, without any context. Each clip's speech
+///    is cut into windows of about 25 seconds at pauses, and lines appear as windows finish.
+///    Without a context, Whisper writes every word and every repeated take, in the speaker's
+///    dialect. This is the transcript the user gets; the later steps only correct its words.
+/// 2. **Topic:** when the user gave no context, Gemini reads that transcript and writes a
+///    short one (topic, names, terms) in the speaker's own dialect.
+/// 3. **Context pass:** Whisper again, primed with that context. It gets names and terms
+///    right, but tends to skip repeated takes and make speech formal, so it's only used as
+///    a second reading of each line, never shown.
+/// 4. **Cleanup:** Gemini proofreads the main pass with the second reading beside every line.
+///    It sees text only and can't change timing; a line it would shorten or pad keeps
+///    Whisper's version, so repeats and false starts stay.
+///
+/// Without Antigravity, there's a single Whisper pass (with the user's context, if any).
 @Observable
 final class TranscriptionController {
 
     enum Phase: Equatable {
         case idle
         case running
+        case findingTopic
         case cleaning
         case finished
         case failed(String)
     }
 
-    /// Spoken languages offered for Whisper. `nil` detects the language per window.
-    static let languages: [(code: String?, name: String)] = [
-        (nil, "Detect automatically"),
-        ("ar", "Arabic"),
-        ("en", "English"),
-        ("fr", "French"),
-        ("de", "German"),
-        ("es", "Spanish"),
-        ("tr", "Turkish"),
-    ]
+    /// The spoken language. Fixed: HT Edit is tuned for Arabic (English words inside it are kept).
+    nonisolated static let language = "ar"
 
     // MARK: State
 
     /// Whisper's state: `.ready` once it's set up, `.needsSetup` before.
     private(set) var engineStatus: EngineStatus = .unknown
-    /// Antigravity's state, for the cleanup step.
+    /// Antigravity's state, for the topic and cleanup steps.
     private(set) var cleanupStatus: EngineStatus = .unknown
     private(set) var phase: Phase = .idle
     private(set) var isSettingUp = false
     private(set) var setupError: String?
     /// Clip-relative segments per clip, sorted by start.
     private(set) var transcripts: [UUID: [TranscriptSegment]] = [:]
-    /// Chunks per clip in the current run, and those that failed.
+    /// Chunks per clip in the current Whisper pass, and those that failed in any pass.
     private(set) var plannedChunks: [UUID: [Range<Double>]] = [:]
     private(set) var finishedChunks: [UUID: Set<Double>] = [:]
     private(set) var failedChunks: [UUID: [Range<Double>]] = [:]
     private(set) var lastFailureMessage: String?
-    /// Why the last cleanup didn't happen or didn't finish; the Whisper text is kept.
+    /// Why the topic or cleanup step didn't happen or didn't finish; Whisper's text is kept.
     private(set) var cleanupNote: String?
+    /// The context Gemini worked out when the user left the field empty.
+    private(set) var detectedContext: String?
+    /// Whisper passes done in this run, out of `passCount`.
+    private(set) var passesDone = 0
+    private(set) var passCount = 1
 
-    /// Words, names or background; empty by default. Whisper is primed with it,
-    /// and the cleanup uses it to get names and terms right.
+    /// Topic, names, terms or spellings, written the way the speaker talks. Empty by
+    /// default; when empty, Gemini works one out from the rough transcript.
     var context = ""
-
-    /// The spoken language, remembered across launches; `nil` detects it.
-    var language: String? {
-        didSet { defaults?.set(language, forKey: Self.languageDefaultsKey) }
-    }
-
-    /// Whether Whisper reads each window twice (with and without the context) so the
-    /// cleanup can recover dialect words; about twice as slow. Remembered across launches.
-    var secondPass: Bool {
-        didSet { defaults?.set(secondPass, forKey: Self.secondPassDefaultsKey) }
-    }
-
-    /// Whether Gemini proofreads Whisper's text, remembered across launches.
-    var cleanupEnabled: Bool {
-        didSet { defaults?.set(cleanupEnabled, forKey: Self.cleanupDefaultsKey) }
-    }
 
     /// The user's cleanup model, remembered across launches. `nil` means the cheapest available.
     var preferredModelID: String? {
@@ -97,14 +86,25 @@ final class TranscriptionController {
         return models.first { $0.id == preferredModelID } ?? models.first ?? TranscriptionModel.catalog[0]
     }
 
-    var isRunning: Bool { phase == .running || phase == .cleaning }
+    var isRunning: Bool { phase == .running || phase == .findingTopic || phase == .cleaning }
 
-    /// Fraction of the current run's chunks that are done (finished or failed).
+    /// Fraction of the current run done: finished Whisper passes plus the current pass's windows.
     var progress: Double {
         let total = plannedChunks.values.reduce(0) { $0 + $1.count }
-        guard total > 0 else { return phase == .cleaning ? 1 : 0 }
-        let done = finishedChunks.values.reduce(0) { $0 + $1.count } + failedChunks.values.reduce(0) { $0 + $1.count }
-        return Double(done) / Double(total)
+        let done = finishedChunks.values.reduce(0) { $0 + $1.count } + failedInPass
+        let current = phase == .running && total > 0 ? Double(done) / Double(total) : 0
+        return min(1, (Double(passesDone) + current) / Double(max(1, passCount)))
+    }
+
+    /// What the run is doing, for the caption under the progress bar.
+    var stepDescription: String? {
+        switch phase {
+        case .running:
+            passCount > 1 ? "Whisper pass \(min(passesDone + 1, passCount)) of \(passCount)…" : "Transcribing with Whisper…"
+        case .findingTopic: "Working out the topic with Gemini…"
+        case .cleaning: "Cleaning up with Gemini…"
+        default: nil
+        }
     }
 
     var hasFailedChunks: Bool { failedChunks.values.contains { !$0.isEmpty } }
@@ -123,13 +123,12 @@ final class TranscriptionController {
     private let transcriber: Transcriber
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var runTask: Task<Void, Never>?
+    /// Chunks that failed in the current pass (for progress).
+    private var failedInPass = 0
     private static let modelDefaultsKey = "transcriptionModel"
-    private static let languageDefaultsKey = "transcriptionLanguage"
-    private static let cleanupDefaultsKey = "transcriptionCleanup"
-    private static let secondPassDefaultsKey = "transcriptionSecondPass"
 
     /// - Parameters:
-    ///   - cleaner: proofreads Whisper's text; `nil` skips that step.
+    ///   - cleaner: works out the topic and proofreads Whisper's text; `nil` gives one plain Whisper pass.
     ///   - installation: where `Set Up Whisper` installs; `nil` hides setup (tests).
     ///   - defaults: where choices are remembered; `nil` doesn't remember them (tests).
     init(
@@ -147,12 +146,9 @@ final class TranscriptionController {
         self.transcriber = Transcriber(engine: engine, cache: cache, chunkLength: chunkLength)
         self.defaults = defaults
         self.preferredModelID = defaults?.string(forKey: Self.modelDefaultsKey)
-        self.language = defaults?.string(forKey: Self.languageDefaultsKey)
-        self.cleanupEnabled = defaults?.object(forKey: Self.cleanupDefaultsKey) as? Bool ?? true
-        self.secondPass = defaults?.object(forKey: Self.secondPassDefaultsKey) as? Bool ?? true
     }
 
-    /// The controller the app uses: local Whisper plus Antigravity cleanup, or a fake for UI tests.
+    /// The controller the app uses: local Whisper plus Antigravity, or a fake for UI tests.
     static func live() -> TranscriptionController {
         #if DEBUG
         if let engine = UITestSupport.fakeTranscriptionEngine() {
@@ -167,7 +163,7 @@ final class TranscriptionController {
 
     // MARK: Actions
 
-    /// Checks whether Whisper is set up, and whether Antigravity can clean up (and with which models).
+    /// Checks whether Whisper is set up, and whether Antigravity can help (and with which models).
     func refreshStatus() async {
         guard engineStatus != .checking else { return }
         engineStatus = .checking
@@ -236,13 +232,15 @@ final class TranscriptionController {
         plannedChunks = [:]
         finishedChunks = [:]
         failedChunks = [:]
+        failedInPass = 0
         lastFailureMessage = nil
         cleanupNote = nil
+        detectedContext = nil
         guard !jobs.isEmpty else { return }
         phase = .running
-        let wanted = Set(jobs.map(\.clipID))
-        // The second pass only helps the cleanup, and only differs from the first when there's a context.
-        let options = TranscriptionOptions(language: language, context: context, secondPass: secondPass && cleanupEnabled && cleaner != nil)
+        passesDone = 0
+        passCount = jobs.count * (cleaner == nil ? 1 : 2)
+        let userContext = context.trimmingCharacters(in: .whitespacesAndNewlines)
 
         runTask = Task {
             if case .ready = engineStatus {} else { await refreshStatus() }
@@ -257,12 +255,14 @@ final class TranscriptionController {
                 break
             }
             do {
-                for try await event in transcriber.run(jobs, options: options) {
-                    apply(event, wanted: wanted)
+                for job in jobs {
+                    if cleaner == nil {
+                        _ = try await whisperPass(job, options: TranscriptionOptions(language: Self.language, context: userContext))
+                    } else {
+                        try await process(job, userContext: userContext)
+                    }
+                    try Task.checkCancellation()
                 }
-                guard !Task.isCancelled else { return }
-                try await cleanUp(jobs.filter { failedChunks[$0.clipID]?.isEmpty ?? true }, context: options.context)
-                guard !Task.isCancelled else { return }
                 phase = .finished
             } catch is CancellationError {
                 return
@@ -276,11 +276,83 @@ final class TranscriptionController {
         }
     }
 
-    /// Proofreads each finished clip's Whisper text with Gemini. Failures keep Whisper's text.
-    private func cleanUp(_ jobs: [TranscriptionJob], context: String) async throws {
-        guard cleanupEnabled, let cleaner else { return }
-        let jobs = jobs.filter { !(transcripts[$0.clipID] ?? []).isEmpty }
-        guard !jobs.isEmpty else { return }
+    /// Rough pass, topic, context pass and cleanup for one clip.
+    private func process(_ job: TranscriptionJob, userContext: String) async throws {
+        let rough = try await whisperPass(job, options: TranscriptionOptions(language: Self.language))
+        try Task.checkCancellation()
+
+        var context = userContext
+        if context.isEmpty, !rough.isEmpty {
+            phase = .findingTopic
+            context = await findTopic(job, rough: rough)
+            if !context.isEmpty { detectedContext = context }
+        }
+        guard !context.isEmpty else {
+            passesDone += 1   // no context to prime a second pass with: keep the rough pass
+            return
+        }
+
+        let primed = try await whisperPass(job, options: TranscriptionOptions(language: Self.language, context: context), shown: false)
+        try Task.checkCancellation()
+        guard transcripts[job.clipID] != nil else { return }   // removed meanwhile
+        transcripts[job.clipID] = TranscriptTimeline.attachingAlternatives(from: primed, to: rough)
+
+        guard failedChunks[job.clipID]?.isEmpty ?? true else { return }
+        try await cleanUp(job, context: context)
+    }
+
+    /// Runs Whisper over the job's chunks and returns the clip's lines. With `shown`, lines
+    /// replace the clip's transcript as they arrive; otherwise they're only returned.
+    private func whisperPass(_ job: TranscriptionJob, options: TranscriptionOptions, shown: Bool = true) async throws -> [TranscriptSegment] {
+        phase = .running
+        plannedChunks[job.clipID] = nil
+        finishedChunks[job.clipID] = nil
+        failedInPass = 0
+        var lines = shown ? (transcripts[job.clipID] ?? []) : []
+        for try await event in transcriber.run([job], options: options) {
+            if case .cached(_, let segments) = event { lines = segments }
+            if case .chunkFinished(let clipID, let chunk, let segments) = event, clipID == job.clipID, plannedChunks[clipID] != nil {
+                lines = TranscriptTimeline.merging(segments, into: lines, chunk: chunk)
+            }
+            apply(event, clipID: job.clipID, shown: shown)
+        }
+        passesDone += 1
+        plannedChunks[job.clipID] = nil
+        finishedChunks[job.clipID] = nil
+        failedInPass = 0
+        return lines
+    }
+
+    /// Asks Gemini for a short context from the rough transcript. Failures leave it empty.
+    private func findTopic(_ job: TranscriptionJob, rough: [TranscriptSegment]) async -> String {
+        guard let cleaner else { return "" }
+        if case .ready = cleanupStatus {} else { await refreshCleanupStatus() }
+        guard case .ready = cleanupStatus else {
+            cleanupNote = "Not cleaned up: " + Self.describe(cleanupStatus)
+            return ""
+        }
+        let model = selectedModel.id
+        let key = TranscriptCache.topicKey(for: job.url, rough: rough, model: model)
+        if let cache, let key, let cached = await cache.load(key: key), let topic = cached.first?.text {
+            return topic
+        }
+        do {
+            let topic = try await cleaner.topic(of: rough.map(\.text), model: model)
+            if let cache, let key, !topic.isEmpty {
+                await cache.store([TranscriptSegment(start: 0, end: 0, text: topic)], key: key)
+            }
+            return topic
+        } catch is CancellationError {
+            return ""
+        } catch {
+            cleanupNote = "Couldn't work out the topic: \(error.localizedDescription)"
+            return ""
+        }
+    }
+
+    /// Proofreads the clip's lines with Gemini. Failures keep Whisper's text.
+    private func cleanUp(_ job: TranscriptionJob, context: String) async throws {
+        guard let cleaner, let raw = transcripts[job.clipID], !raw.isEmpty else { return }
         phase = .cleaning
         if case .ready = cleanupStatus {} else { await refreshCleanupStatus() }
         guard case .ready = cleanupStatus else {
@@ -288,30 +360,25 @@ final class TranscriptionController {
             return
         }
         let model = selectedModel.id
-        for job in jobs {
-            try Task.checkCancellation()
-            guard let raw = transcripts[job.clipID] else { continue }
-            // Edited instructions give a different cleanup, so they're part of the key.
-            let key = TranscriptCache.cleanupKey(for: job.url, raw: raw, model: model, context: context, instructions: CleanupInstructions.current(defaults))
-            if let cache, let key, let cached = await cache.load(key: key), cached.count == raw.count {
-                transcripts[job.clipID] = cached
-                continue
-            }
-            do {
-                let corrected = try await cleaner.clean(raw.map { CleanupLine($0.text, alternative: $0.alternative) }, model: model, context: context)
-                // The clip may have been removed or re-run meanwhile.
-                guard transcripts[job.clipID] == raw else { continue }
-                let cleaned = Self.applying(corrected, to: raw)
-                transcripts[job.clipID] = cleaned
-                if let cache, let key { await cache.store(cleaned, key: key) }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                cleanupNote = "Not cleaned up: \(error.localizedDescription)"
-                if let error = error as? AgyError, error.isFatal {
-                    cleanupStatus = error == .notSignedIn ? .notSignedIn : .notInstalled
-                    return
-                }
+        // Edited instructions give a different cleanup, so they're part of the key.
+        let key = TranscriptCache.cleanupKey(for: job.url, raw: raw, model: model, context: context, instructions: CleanupInstructions.current(defaults))
+        if let cache, let key, let cached = await cache.load(key: key), cached.count == raw.count {
+            transcripts[job.clipID] = cached
+            return
+        }
+        do {
+            let corrected = try await cleaner.clean(raw.map { CleanupLine($0.text, alternative: $0.alternative) }, model: model, context: context)
+            // The clip may have been removed or re-run meanwhile.
+            guard transcripts[job.clipID] == raw else { return }
+            let cleaned = Self.applying(corrected, to: raw)
+            transcripts[job.clipID] = cleaned
+            if let cache, let key { await cache.store(cleaned, key: key) }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            cleanupNote = "Not cleaned up: \(error.localizedDescription)"
+            if let error = error as? AgyError, error.isFatal {
+                cleanupStatus = error == .notSignedIn ? .notSignedIn : .notInstalled
             }
         }
     }
@@ -320,7 +387,9 @@ final class TranscriptionController {
     nonisolated static func applying(_ corrected: [String?], to raw: [TranscriptSegment]) -> [TranscriptSegment] {
         raw.enumerated().map { index, segment in
             guard index < corrected.count, let text = corrected[index] else { return segment }
-            return TranscriptSegment(start: segment.start, end: segment.end, text: text, alternative: segment.alternative)
+            var segment = segment
+            segment.text = text
+            return segment
         }
     }
 
@@ -333,20 +402,23 @@ final class TranscriptionController {
         }
     }
 
-    private func apply(_ event: TranscriptionEvent, wanted: Set<UUID>) {
+    private func apply(_ event: TranscriptionEvent, clipID wanted: UUID, shown: Bool) {
         switch event {
         case .cached(let clipID, let segments):
-            transcripts[clipID] = segments
+            if shown { transcripts[clipID] = segments }
         case .planned(let clipID, let chunks):
             plannedChunks[clipID] = chunks
         case .chunkFinished(let clipID, let chunk, let segments):
             // A clip removed mid-run is no longer planned: drop its late results.
-            guard wanted.contains(clipID), plannedChunks[clipID] != nil else { return }
-            transcripts[clipID] = TranscriptTimeline.merging(segments, into: transcripts[clipID] ?? [], chunk: chunk)
+            guard clipID == wanted, plannedChunks[clipID] != nil else { return }
+            if shown { transcripts[clipID] = TranscriptTimeline.merging(segments, into: transcripts[clipID] ?? [], chunk: chunk) }
             finishedChunks[clipID, default: []].insert(chunk.lowerBound)
         case .chunkFailed(let clipID, let chunk, let message):
-            guard wanted.contains(clipID), plannedChunks[clipID] != nil else { return }
-            failedChunks[clipID, default: []].append(chunk)
+            guard clipID == wanted, plannedChunks[clipID] != nil else { return }
+            if !(failedChunks[clipID]?.contains(chunk) ?? false) {
+                failedChunks[clipID, default: []].append(chunk)
+            }
+            failedInPass += 1
             lastFailureMessage = message
         }
     }

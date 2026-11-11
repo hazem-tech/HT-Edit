@@ -8,13 +8,8 @@ Started by HT Edit (WhisperServer.swift) with the venv's Python:
 It loads faster-whisper once, prints {"ready": true} and then answers one JSON
 request per stdin line with one JSON reply per stdout line:
 
-    -> {"id": 1, "wav": "/path/window.wav", "language": "ar", "prompt": "...", "second_pass": true}
-    <- {"id": 1, "segments": [{"start": 0.0, "end": 2.1, "text": "...", "alternative": "..."}]}
-
-With `second_pass`, the window is transcribed again without the prompt. The
-prompt helps with names and topic but pushes Whisper toward formal language;
-the plain pass keeps more of the speaker's dialect. Each line gets the plain
-pass's words for the same moment as `alternative`, for the cleanup to weigh.
+    -> {"id": 1, "wav": "/path/window.wav", "language": "ar", "prompt": "..."}
+    <- {"id": 1, "segments": [{"start": 0.0, "end": 2.1, "text": "...", "words": [{"start": 0.0, "end": 0.4, "text": "..."}]}]}
     <- {"id": 1, "error": "..."}
 
 `wav` must be 16 kHz mono 16-bit PCM (HT Edit writes it). HT Edit already cut
@@ -64,17 +59,6 @@ def read_wav(path):
     return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def attach_alternatives(lines, words):
-    """Gives each line the second pass's words that fall in its time span."""
-    for line in lines:
-        picked = [w["text"] for w in words
-                  if line["start"] - 0.15 <= (w["start"] + w["end"]) / 2 <= line["end"] + 0.15]
-        alternative = " ".join(picked)
-        if alternative and alternative != line["text"]:
-            line["alternative"] = alternative
-    return lines
-
-
 def lines_from_words(words):
     lines, current = [], []
     for word in words:
@@ -91,17 +75,24 @@ def lines_from_words(words):
     if current:
         lines.append(current)
     return [
-        {"start": round(ws[0]["start"], 3), "end": round(ws[-1]["end"], 3), "text": " ".join(w["text"] for w in ws)}
+        {"start": round(ws[0]["start"], 3), "end": round(ws[-1]["end"], 3), "text": " ".join(w["text"] for w in ws),
+         "words": [{"start": round(w["start"], 3), "end": round(w["end"], 3), "text": w["text"]} for w in ws]}
         for ws in lines
     ]
 
 
 def looks_looped(words):
-    """True when a window's text is mostly one phrase repeated (Whisper got stuck)."""
+    """True when Whisper got stuck: one phrase repeated, one word many times in a row,
+    or a long "word" made of a few repeated letters (قرقرقرقر…)."""
     tokens = [w["text"] for w in words]
-    if len(tokens) < 12:
-        return False
-    return len(set(tokens)) / len(tokens) < 0.3
+    if len(tokens) >= 12 and len(set(tokens)) / len(tokens) < 0.3:
+        return True
+    run = 1
+    for previous, token in zip(tokens, tokens[1:]):
+        run = run + 1 if token == previous else 1
+        if run >= 4:
+            return True
+    return any(len(t) >= 16 and len(set(t)) <= 4 for t in tokens)
 
 
 def is_hallucination(text):
@@ -154,12 +145,7 @@ def transcribe(model, request):
         retry = run_whisper(model, audio, language, attempt_prompt, strict=strict)
         if not looks_looped(retry) or strict:
             words = retry if not looks_looped(retry) else words
-    lines = lines_from_words(words)
-    if request.get("second_pass") and prompt:
-        plain = run_whisper(model, audio, language, None, strict=False)
-        if not looks_looped(plain):
-            attach_alternatives(lines, plain)
-    return lines
+    return lines_from_words(words)
 
 
 def main():

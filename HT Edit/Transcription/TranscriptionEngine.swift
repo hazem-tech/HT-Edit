@@ -29,14 +29,10 @@ nonisolated struct TranscriptionOptions: Sendable, Hashable {
     var language: String?
     /// Names, terms or spellings; also primes Whisper with the speaker's style.
     var context: String
-    /// Transcribe each window a second time without the context, so the cleanup
-    /// can see wording the context pushed toward formal language. About twice as slow.
-    var secondPass: Bool
 
-    init(language: String? = nil, context: String = "", secondPass: Bool = false) {
+    init(language: String? = nil, context: String = "") {
         self.language = language
         self.context = context
-        self.secondPass = secondPass
     }
 }
 
@@ -74,4 +70,7 @@ nonisolated protocol TranscriptCleaner: Sendable {
     func checkStatus() async -> EngineStatus
     /// Corrected text per line, in the same order. A `nil` entry keeps that line as it is.
     func clean(_ lines: [CleanupLine], model: String, context: String) async throws -> [String?]
+    /// A short context (topic, names, terms) worked out from a rough transcript,
+    /// written in the speaker's own language, for when the user gave none.
+    func topic(of lines: [String], model: String) async throws -> String
 }

@@ -7,9 +7,9 @@ import AppKit
 import CoreMedia
 import SwiftUI
 
-/// Inspector tab: set up Whisper once, pick the language, add optional context,
-/// transcribe, and read the timestamped transcript. Clicking a line jumps the
-/// player there. Gemini (through Antigravity) can proofread Whisper's text.
+/// Inspector tab: set up Whisper once, add an optional context, transcribe, and
+/// read the timestamped transcript. Clicking a line jumps the player there.
+/// The pipeline itself is fixed (see `TranscriptionController`).
 struct TranscriptPanel: View {
     @Bindable var model: EditorViewModel
 
@@ -48,46 +48,33 @@ struct TranscriptPanel: View {
             }
 
             Section {
-                Picker("Language", selection: $transcription.language) {
-                    ForEach(TranscriptionController.languages, id: \.name) { option in
-                        Text(option.name).tag(option.code)
-                    }
-                }
-                .accessibilityIdentifier("transcriptLanguagePicker")
-
-                TextField("Context", text: $transcription.context, prompt: Text("Topic, names, terms, written the way you speak (optional)"), axis: .vertical)
+                TextField("Context", text: $transcription.context, prompt: Text("Optional: topic, names, terms, the way you say them"), axis: .vertical)
                     .lineLimit(2...5)
                     .accessibilityIdentifier("transcriptContextField")
+                if let detected = controller.detectedContext, controller.context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    LabeledContent("Topic found") {
+                        Text(detected).textSelection(.enabled)
+                    }
+                    .font(.caption)
+                    .accessibilityIdentifier("detectedContext")
+                }
+                if controller.hasCleaner {
+                    Picker("Cleanup model", selection: modelSelection) {
+                        ForEach(Array(controller.availableModels.enumerated()), id: \.element.id) { index, option in
+                            Text(index == 0 ? "\(option.displayName) (cheapest)" : option.displayName)
+                                .tag(option.id)
+                        }
+                    }
+                    .accessibilityIdentifier("transcriptModelPicker")
+                    if let problem = CleanupProblem(status: controller.cleanupStatus) {
+                        problem
+                    }
+                }
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Whisper runs on this Mac: nothing is uploaded and nothing is charged. Context written in your own dialect helps it keep that dialect.")
+                Text("Arabic speech, with English words kept as spoken. Whisper transcribes on this Mac, twice: without and with the context. Gemini, through Antigravity with your Google account, works out the topic when the context is empty and fixes misheard words. It keeps your dialect and never changes timestamps or drops lines.")
                     .foregroundStyle(.secondary)
-            }
-
-            if controller.hasCleaner {
-                Section {
-                    Toggle("Clean up with Gemini", isOn: $transcription.cleanupEnabled)
-                        .accessibilityIdentifier("transcriptCleanupToggle")
-                    if controller.cleanupEnabled {
-                        Picker("Model", selection: modelSelection) {
-                            ForEach(Array(controller.availableModels.enumerated()), id: \.element.id) { index, option in
-                                Text(index == 0 ? "\(option.displayName) (cheapest)" : option.displayName)
-                                    .tag(option.id)
-                            }
-                        }
-                        .accessibilityIdentifier("transcriptModelPicker")
-                        Toggle("Second Whisper pass", isOn: $transcription.secondPass)
-                            .help("Whisper reads each part again without your context. Gemini compares both readings, which brings back dialect words the context made formal. About twice as slow.")
-                            .accessibilityIdentifier("transcriptSecondPassToggle")
-                        if let problem = CleanupProblem(status: controller.cleanupStatus) {
-                            problem
-                        }
-                    }
-                } footer: {
-                    Text("Gemini, through Antigravity with your Google account, fixes misheard words and names in Whisper's text. It gets text only, keeps your dialect, and never changes timestamps or drops lines.")
-                        .foregroundStyle(.secondary)
-                }
             }
 
             Section {
@@ -133,10 +120,11 @@ struct TranscriptPanel: View {
                     .accessibilityIdentifier("transcriptProgress")
                 Button("Cancel") { controller.cancel() }
             }
-            if controller.phase == .cleaning {
-                Text("Cleaning up with Gemini…")
+            if let step = controller.stepDescription {
+                Text(step)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("transcriptStep")
             }
         } else {
             Button(model.timelineTranscript.isEmpty ? "Transcribe" : "Transcribe Again", systemImage: "waveform.and.mic") {

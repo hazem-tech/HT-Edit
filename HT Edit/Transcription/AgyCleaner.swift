@@ -88,6 +88,31 @@ nonisolated enum AgyCommand {
     /// comes back as structured output instead of free text.
     static let cleanupSchema = #"{"type":"object","properties":{"lines":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"text":{"type":"string"}},"required":["id","text"]}}},"required":["lines"]}"#
 
+    static let topicSchema = #"{"type":"object","properties":{"context":{"type":"string"}},"required":["context"]}"#
+
+    /// Asks for a short context from a rough transcript, the way a person would
+    /// skim it before correcting it: topic, and the names and terms in it.
+    static func topic(lines: [String], model: String, timeout: Duration) -> [String] {
+        let prompt = [
+            "Below is a rough automatic speech-to-text transcript; many words are misheard.",
+            "Work out what the speaker is talking about. Write ONE short sentence, at most 15 words, that names the topic and the few main names or products the speaker says, spelled correctly (English names in Latin letters). It primes a speech recognizer, so keep it short and plain.",
+            "Write it the way the speaker talks, in the same language and dialect (for example Egyptian Arabic, not formal Arabic). No lists, no brackets, no translations, no explanations.",
+            "Example of the form: فيديو بالعامية المصرية عن ChatGPT والـ privacy",
+            "Don't summarize the content and don't add anything that isn't suggested by the transcript.",
+            "Don't run commands, and don't read or change any files.",
+            "Transcript:",
+            String(lines.joined(separator: "\n").prefix(referenceLimit)),
+            #"Reply only with JSON of the form {"context":"..."}."#,
+        ].joined(separator: "\n")
+        return [
+            "-p", prompt,
+            "--output-format", "json",
+            "--json-schema", topicSchema,
+            "--model", model,
+            "--print-timeout", "\(Int(timeout.components.seconds))s",
+        ]
+    }
+
     /// Most transcript characters sent as background with each batch, so the
     /// model knows what the whole clip is about.
     static let referenceLimit = 12_000
@@ -110,11 +135,11 @@ nonisolated enum AgyCommand {
         let hasAlternatives = lines.contains { $0.line.alternative != nil }
         var parts = [instructions.trimmingCharacters(in: .whitespacesAndNewlines)]
         if hasAlternatives {
-            parts.append("Some lines have \"alt\": a second recognition of the same audio made without the context. It is often closer to the speaker's dialect but worse at names and terms. Per word, choose what the speaker most likely said; the output must still cover the whole line.")
+            parts.append("Some lines have \"alt\": a second recognition of the same moment, made with the topic as a hint. It is usually better at names and terms (use it to fix those), but it tends to skip repeated words and make speech formal, so never drop words from the line because alt lacks them. Per word, choose what the speaker most likely said; the output must still cover the whole line.")
         }
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         if !context.isEmpty {
-            parts.append("Context from the user (names, terms, spellings, topic): \(context)")
+            parts.append("Context (names, terms, spellings, topic): \(context)")
         }
         let reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
         if !reference.isEmpty {
@@ -165,6 +190,40 @@ nonisolated enum AgyOutputParser {
             if let array = try? decoder.decode([Line].self, from: data) { return array }
         }
         throw AgyError.invalidOutput(String(text.prefix(200)))
+    }
+
+    /// The `context` field of a topic reply.
+    static func topic(from stdout: String) throws -> String {
+        struct Topic: Decodable { var context: String }
+        struct Envelope: Decodable {
+            var status: String?
+            var response: String?
+            var error: String?
+            var structured_output: Topic?
+        }
+        let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = trimmed
+        if let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(trimmed.utf8)) {
+            if let status = envelope.status, status.uppercased() != "SUCCESS" {
+                throw AgyError.failed(envelope.error ?? status)
+            }
+            if let topic = envelope.structured_output { return unwrap(topic.context) }
+            text = envelope.response ?? trimmed
+        }
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end,
+              let topic = try? JSONDecoder().decode(Topic.self, from: Data(text[start...end].utf8)) else {
+            throw AgyError.invalidOutput(String(text.prefix(200)))
+        }
+        return unwrap(topic.context)
+
+        /// Models sometimes put the whole JSON inside the field; keep only the sentence.
+        func unwrap(_ value: String) -> String {
+            let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.hasPrefix("{"), let inner = try? JSONDecoder().decode(Topic.self, from: Data(value.utf8)) {
+                return unwrap(inner.context)
+            }
+            return value
+        }
     }
 
     private struct LineList: Decodable {
@@ -290,7 +349,21 @@ actor AgyCleaner: TranscriptCleaner {
         return result
     }
 
+    func topic(of lines: [String], model: String) async throws -> String {
+        guard let agy = await executable() else { throw AgyError.notInstalled }
+        guard !lines.isEmpty else { return "" }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "topic-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let output = try await runRaw(agy, arguments: AgyCommand.topic(lines: lines, model: model, timeout: timeout), in: folder)
+        return try AgyOutputParser.topic(from: output.stdout)
+    }
+
     private func run(_ agy: URL, arguments: [String], in folder: URL) async throws -> [AgyOutputParser.Line] {
+        try AgyOutputParser.lines(from: try await runRaw(agy, arguments: arguments, in: folder).stdout)
+    }
+
+    private func runRaw(_ agy: URL, arguments: [String], in folder: URL) async throws -> ProcessOutput {
         let output: ProcessOutput
         do {
             output = try await ProcessRunner.run(
@@ -301,7 +374,7 @@ actor AgyCleaner: TranscriptCleaner {
             throw AgyError.timedOut
         }
         guard output.status == 0 else { throw AgyError.from(output) }
-        return try AgyOutputParser.lines(from: output.stdout)
+        return output
     }
 
     // MARK: Locating agy

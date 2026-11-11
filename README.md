@@ -22,35 +22,35 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
-- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Whisper transcribes on your Mac; Gemini can proofread the text. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Whisper transcribes on your Mac; Gemini works out the topic and proofreads the text. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
 
 ## Transcription
 
-Transcription has two steps. The first runs entirely on your Mac; the second is optional and only ever sees text.
+Transcription is tuned for **Arabic speech** (English words inside it are kept as spoken) and its steps are fixed. The only thing you give it is an optional **context**.
 
-1. **Whisper (local):** speech to text with timestamps, using Whisper large-v3-turbo through `faster-whisper`. Nothing is uploaded and nothing is charged. It keeps your dialect and every word, and its timestamps come from the audio itself, so they don't drift.
-2. **Gemini cleanup (optional):** your own **Antigravity CLI (`agy`)**, under your Google account and subscription, proofreads Whisper's text. It fixes misheard words and product names (for example "شاتي بيتي" becomes "ChatGPT"). It keeps the speaker's dialect and never rewrites it into formal language. It gets text only, never audio, and it can't change timing: each line keeps Whisper's timestamps, and a corrected line that drops or adds words is rejected in favor of Whisper's version.
+1. **Main pass, on your Mac:** Whisper large-v3-turbo (`faster-whisper`) transcribes the speech without any hint. Without a hint, Whisper writes every word and every repeated take, in your dialect. This is the transcript you get, and its timestamps come from the audio, so they don't drift. Lines appear as each part finishes.
+2. **Topic:** if the context field is empty, Gemini reads that transcript and writes a one-line context in your dialect, the way a person would skim it first. For example: "فيديو بالعامية المصرية عن ميزة الوضع الخفي في ChatGPT والـ privacy". It's shown under the field as **Topic found**.
+3. **Context pass, on your Mac:** Whisper again, with the context as a hint. It gets names and terms right, like ChatGPT, but it tends to skip repeated takes and make speech formal, so it's never shown. It only serves as a second reading of each line.
+4. **Cleanup:** Gemini, through your own **Antigravity CLI (`agy`)** under your Google account and subscription, proofreads the main transcript with the second reading beside every line. It fixes misheard words and names and keeps your dialect. It gets text only, never audio, and it can't change timing: each line keeps Whisper's timestamps, and a corrected line that drops or adds words is rejected in favor of Whisper's version. Repeats and false starts stay.
 
-Because Gemini only reads a few kilobytes of text instead of listening to the audio, a run costs far less of your subscription than having Gemini transcribe.
+Gemini only reads text, a few calls per clip, so a run costs much less of your subscription than having Gemini listen to the audio.
+
+On a 5½-minute Egyptian Arabic test video, with the context left empty, about 84% of the words matched a hand-checked transcript (Whisper alone: 65%), and every repeated take was kept. The whole run took about 5 minutes on an M1.
 
 **One-time setup:**
 - **Whisper:** open the **Transcript** tab and press **Set Up Whisper**. It creates a small Python environment and downloads the model (about 1.7 GB) into `~/Library/Application Support/HT Edit/Whisper`. You need Python 3.9–3.13 (for example `brew install python@3.12`). To do the same in Terminal, run `zsh "HT Edit/Transcription/Whisper/whisper_setup.sh"`, and pass an existing large-v3-turbo folder as the second argument to copy it instead of downloading.
-- **Cleanup (optional):** install the Antigravity CLI and sign in once (run `agy` in Terminal). Without it, you still get Whisper's transcript.
+- **Antigravity:** install the Antigravity CLI and sign in once (run `agy` in Terminal). Without it, you get the main Whisper pass only.
 
-**Every time:**
-1. Open the **Transcript** tab and pick the **language** you speak. "Detect automatically" works too, but naming it is more reliable for Arabic.
-2. Optional: type **context**, written the way you talk. It primes Whisper with your topic, dialect and spellings, and the cleanup uses it to get names right.
-3. Press **Transcribe**. Lines appear as Whisper finishes each window, then the cleanup replaces their text.
+**Every time:** open the **Transcript** tab, optionally type a context (topic, names, terms, written the way you talk), and press **Transcribe**.
 
 How it works:
 - HT Edit measures each clip's loudness and cuts its speech into windows of about 25 seconds, always at pauses. Whisper handles these much better than one long pass, which loops on repeated takes, or short chunks, which lose context.
-- Each window is written as 16 kHz mono WAV and sent to a Whisper helper (`whisper_server.py`). The helper loads the model once per session and returns lines with word-accurate timestamps.
-- With **Second Whisper pass** on (the default), each window is transcribed twice: with your context, which gets names and terms right, and without it, which keeps more of your dialect. The cleanup sees both readings of every line and picks per word. This takes about twice as long. On a 5½-minute Egyptian Arabic test video, it raised agreement with a hand-checked transcript from 77% to 84% of words.
-- When every window is done, the clip's lines go to `agy -p … --output-format json --json-schema …`, 80 lines per request, together with the whole transcript for context.
-- A failed window is retried once; anything that still fails can be retried on its own. If the cleanup fails, Whisper's text stays.
-- Finished transcripts are cached per file, language and context; cleaned versions are cached per model too.
+- Each window is written as 16 kHz mono WAV and sent to a Whisper helper (`whisper_server.py`). The helper loads the model once per session and returns lines with word timestamps. When a window comes back looped (one phrase over and over, one word many times in a row, or a long run of repeated letters), the helper redoes it without the hint, then with repeats blocked. It also drops lines Whisper typically invents over silence.
+- The second reading is matched to each line by word timing. Cleanup runs 80 lines per request, together with the whole transcript for context.
+- A failed window is retried once; anything that still fails can be retried on its own. If the topic or cleanup step fails, Whisper's text stays.
+- Finished passes, topics and cleanups are cached per file, so running again is quick.
 
-**Cleanup instructions** are editable in **HT Edit ▸ Settings…** (⌘,). HT Edit always adds your context, the second Whisper reading, the lines and the reply format after them. **Restore Default** brings back the built-in text, and empty instructions also fall back to it. Edited instructions get their own cache entries, so changing them never reuses an old cleanup.
+**Cleanup instructions** are editable in **HT Edit ▸ Settings…** (⌘,). HT Edit always adds the context, the second Whisper reading, the lines and the reply format after them. **Restore Default** brings back the built-in text, and empty instructions also fall back to it. Edited instructions get their own cache entries, so changing them never reuses an old cleanup.
 
 To check Antigravity by hand, run `zsh scripts/agy-probe.sh`. It runs the exact cleanup command HT Edit uses.
 
