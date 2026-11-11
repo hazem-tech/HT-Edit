@@ -291,7 +291,8 @@ final class TranscriptionController {
         for job in jobs {
             try Task.checkCancellation()
             guard let raw = transcripts[job.clipID] else { continue }
-            let key = TranscriptCache.cleanupKey(for: job.url, raw: raw, model: model, context: context)
+            // Edited instructions give a different cleanup, so they're part of the key.
+            let key = TranscriptCache.cleanupKey(for: job.url, raw: raw, model: model, context: context, instructions: CleanupInstructions.current(defaults))
             if let cache, let key, let cached = await cache.load(key: key), cached.count == raw.count {
                 transcripts[job.clipID] = cached
                 continue

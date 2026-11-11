@@ -38,6 +38,27 @@ struct AgyCommandTests {
         #expect(withContext.contains("all of it"))
     }
 
+    @Test func defaultInstructionsStartThePromptAndEditedOnesReplaceThem() throws {
+        let standard = AgyCommand.prompt(lines: lines, reference: "", context: "")
+        #expect(standard.hasPrefix(CleanupInstructions.defaultText + "\n"))
+
+        let custom = AgyCommand.prompt(lines: lines, reference: "", context: "", instructions: "Fix spelling only.")
+        #expect(custom.hasPrefix("Fix spelling only.\n"))
+        #expect(!custom.contains("Rules:"))
+        #expect(custom.contains("Lines to proofread (JSON)"), "lines and reply format are always added")
+        #expect(custom.contains("Reply only with JSON"))
+    }
+
+    @Test func savedInstructionsWinAndEmptyOnesFallBackToTheDefault() throws {
+        let defaults = try #require(UserDefaults(suiteName: "instructions-\(UUID().uuidString)"))
+        #expect(CleanupInstructions.current(defaults) == CleanupInstructions.defaultText)
+        defaults.set("  Keep it Egyptian.  ", forKey: CleanupInstructions.defaultsKey)
+        #expect(CleanupInstructions.current(defaults) == "Keep it Egyptian.")
+        defaults.set("   \n ", forKey: CleanupInstructions.defaultsKey)
+        #expect(CleanupInstructions.current(defaults) == CleanupInstructions.defaultText)
+        #expect(CleanupInstructions.current(nil) == CleanupInstructions.defaultText)
+    }
+
     private func value(after flag: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
         return arguments[index + 1]

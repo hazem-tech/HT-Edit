@@ -29,10 +29,10 @@ actor TranscriptCache {
     }
 
     /// The proofread version of exactly `raw`, by `model` with `context`.
-    nonisolated static func cleanupKey(for url: URL, raw: [TranscriptSegment], model: String, context: String) -> String? {
+    nonisolated static func cleanupKey(for url: URL, raw: [TranscriptSegment], model: String, context: String, instructions: String) -> String? {
         let context = context.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = raw.map { $0.text + "|" + ($0.alternative ?? "") }.joined(separator: "\n")
-        return FileCacheKey.key(for: url, salt: "cleanup|\(model)|\(context)|\(formatVersion)|\(Self.digest(text))")
+        return FileCacheKey.key(for: url, salt: "cleanup|\(model)|\(context)|\(formatVersion)|\(Self.digest(text))|\(Self.digest(instructions))")
     }
 
     private nonisolated static func digest(_ text: String) -> String {

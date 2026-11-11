@@ -50,6 +50,8 @@ How it works:
 - A failed window is retried once; anything that still fails can be retried on its own. If the cleanup fails, Whisper's text stays.
 - Finished transcripts are cached per file, language and context; cleaned versions are cached per model too.
 
+**Cleanup instructions** are editable in **HT Edit ▸ Settings…** (⌘,). HT Edit always adds your context, the second Whisper reading, the lines and the reply format after them. **Restore Default** brings back the built-in text, and empty instructions also fall back to it. Edited instructions get their own cache entries, so changing them never reuses an old cleanup.
+
 To check Antigravity by hand, run `zsh scripts/agy-probe.sh`. It runs the exact cleanup command HT Edit uses.
 
 Running Whisper and `agy` means HT Edit runs **without the App Sandbox**. Distribute it signed and notarized, outside the Mac App Store. Hardened runtime stays on.
@@ -71,7 +73,7 @@ Running Whisper and `agy` means HT Edit runs **without the App Sandbox**. Distri
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
 | Transcription | `Transcription/Whisper/` (`SpeechWindows.swift` plans windows at pauses, `WhisperEngine.swift` runs `whisper_server.py`, `whisper_setup.sh` installs it), `AgyCleaner.swift` (Gemini cleanup through `agy`, with a guard against dropped words), `Transcriber.swift` (windows, concurrency, retries), `TranscriptionController.swift` (runs Whisper, then cleanup), `TranscriptionEngine.swift`, `TranscriptionModel.swift` (cleanup model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
-| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
+| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`, `SettingsView`), `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
 

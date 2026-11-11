@@ -21,6 +21,11 @@ struct HT_EditApp: App {
             RootView()
         }
         .defaultSize(width: 1280, height: 820)
+
+        // HT Edit ▸ Settings… (⌘,)
+        Settings {
+            SettingsView()
+        }
     }
 }
 
