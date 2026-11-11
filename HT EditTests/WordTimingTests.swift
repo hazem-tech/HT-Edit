@@ -29,7 +29,8 @@ struct TranscriptWordsTests {
         #expect(words.first?.start == 10)
         #expect(abs((words.last?.end ?? 0) - 13) < 1e-9)
         #expect(abs(words[1].end - words[1].start - 1.5) < 1e-9, "twice as long, twice the time")
-        #expect(zip(words, words.dropFirst()).allSatisfy { $0.end == $1.start })
+        let contiguous = zip(words, words.dropFirst()).allSatisfy { $0.end == $1.start }
+        #expect(contiguous)
         #expect(words.allSatisfy(\.isApproximate))
     }
 
@@ -250,7 +251,8 @@ struct WordTimingTranscriberTests {
             return []
         }
         #expect(segments.count == 2)
-        #expect(segments.allSatisfy { $0.words?.isEmpty == false })
+        let allAligned = segments.allSatisfy { $0.words?.isEmpty == false }
+        #expect(allAligned)
         #expect(aligner.callCount == 2)
     }
 
@@ -264,8 +266,10 @@ struct WordTimingTranscriberTests {
         let job = TranscriptionJob(clipID: UUID(), url: audio, duration: 7, chunks: nil)
 
         let events = try await collect(transcriber.run([job], model: "m", context: ""))
-        #expect(events.contains { if case .wordTimingFailed = $0 { true } else { false } })
-        #expect(events.contains { if case .chunkFinished(_, _, let segments) = $0 { segments.first?.words == nil } else { false } })
+        let reportedFailure = events.contains { if case .wordTimingFailed = $0 { true } else { false } }
+        let keptText = events.contains { if case .chunkFinished(_, _, let segments) = $0 { segments.first?.words == nil } else { false } }
+        #expect(reportedFailure)
+        #expect(keptText)
 
         _ = try await collect(transcriber.run([job], model: "m", context: ""))
         #expect(engine.calls.count == 4, "estimated word times aren't cached")
@@ -280,7 +284,8 @@ struct WordTimingTranscriberTests {
 
         let events = try await collect(transcriber.run([TranscriptionJob(clipID: UUID(), url: audio, duration: 3, chunks: nil)], model: "m", context: ""))
         #expect(aligner.callCount == 0)
-        #expect(!events.contains { if case .wordTimingFailed = $0 { true } else { false } })
+        let reportedFailure = events.contains { if case .wordTimingFailed = $0 { true } else { false } }
+        #expect(!reportedFailure)
     }
 }
 
