@@ -5,6 +5,7 @@
 //  Created by Hazem on 10/31/26.
 //
 
+import CoreMedia
 import SwiftUI
 import UniformTypeIdentifiers
 
