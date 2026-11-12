@@ -62,24 +62,68 @@ struct NonSpeechPlannerTests {
 
 struct RemovalPlannerTests {
 
-    @Test func overlappingRangesMergeAndKeepEveryReason() {
-        let merged = RemovalPlanner.merge([
-            (range: range(5, 6), reason: .noSpeech),
-            (range: range(0, 1), reason: .silence),
-            (range: range(0.5, 2), reason: .noSpeech),
-            (range: range(1.5, 1.8), reason: .silence),
-            (range: range(3, 4), reason: .cutWords("hello")),
+    private func parts(_ tagged: [(range: CMTimeRange, reason: RemovalReason)]) -> [RemovedRange] {
+        RemovalPlanner.parts(tagged)
+    }
+
+    @Test func silenceInsideAPauseWithoutSpeechIsItsOwnPart() {
+        // Not speech 0.5–3 s, and silent 1–2 s within it.
+        let result = parts([(range: range(0.5, 3), reason: .noSpeech), (range: range(1, 2), reason: .silence)])
+        #expect(result.map(\.range) == [range(0.5, 1), range(1, 2), range(2, 3)])
+        #expect(result.map(\.reason) == [.noSpeech, .silence, .noSpeech])
+    }
+
+    @Test func silenceThenNoiseReadsSilenceThenNoSpeech() {
+        // One gray stretch: silent first, then sound that isn't speech.
+        let result = parts([(range: range(0, 1), reason: .silence), (range: range(0.5, 2), reason: .noSpeech)])
+        #expect(result.map(\.range) == [range(0, 1), range(1, 2)])
+        #expect(result.map(\.reason) == [.silence, .noSpeech])
+    }
+
+    @Test func cutWordsWinOverEverythingElse() {
+        let result = parts([
+            (range: range(0, 4), reason: .noSpeech),
+            (range: range(0, 4), reason: .silence),
+            (range: range(1, 2), reason: .cutWords("hello")),
         ])
-        #expect(merged.map(\.range) == [range(0, 2), range(3, 4), range(5, 6)])
-        #expect(merged.map(\.reasons) == [[.silence, .noSpeech], [.cutWords("hello")], [.noSpeech]])
+        #expect(result.map(\.reason) == [.silence, .cutWords("hello"), .silence])
+        #expect(result.map(\.range) == [range(0, 1), range(1, 2), range(2, 4)])
+    }
+
+    @Test func touchingRangesWithTheSameReasonAreOnePart() {
+        let result = parts([
+            (range: range(0, 1), reason: .silence),
+            (range: range(1, 2), reason: .silence),
+            (range: range(3, 4), reason: .noSpeech),
+        ])
+        #expect(result.map(\.range) == [range(0, 2), range(3, 4)])
+    }
+
+    @Test func sliversJoinTheirNeighbor() {
+        // Boundaries a hair apart (different timescales) leave a 1 ms piece.
+        let result = parts([
+            (range: range(0, 1), reason: .noSpeech),
+            (range: range(0.999, 2), reason: .silence),
+            (range: range(1.0005, 3), reason: .noSpeech),
+        ])
+        let noSlivers = result.allSatisfy { $0.range.duration >= RemovalPlanner.minimumPart }
+        #expect(noSlivers)
+        #expect(result.first?.reason == .noSpeech)
+        #expect(result.last?.range.end == CMTime(seconds: 3, preferredTimescale: 1000))
+    }
+
+    @Test func playbackSkipsWholeStretches() {
+        let result = parts([(range: range(0.5, 3), reason: .noSpeech), (range: range(1, 2), reason: .silence), (range: range(4, 5), reason: .silence)])
+        #expect(ClipTimeline.merged(result.map(\.range)) == [range(0.5, 3), range(4, 5)])
     }
 
     @Test func emptyRangesAreDropped() {
-        #expect(RemovalPlanner.merge([(range: range(1, 1), reason: .silence)]).isEmpty)
+        #expect(parts([(range: range(1, 1), reason: .silence)]).isEmpty)
+        #expect(parts([]).isEmpty)
     }
 
-    @Test func findsTheRangeUnderAPoint() {
-        let ranges = RemovalPlanner.merge([(range: range(1, 2), reason: .silence), (range: range(4, 5), reason: .noSpeech)])
+    @Test func findsThePartUnderAPoint() {
+        let ranges = parts([(range: range(1, 2), reason: .silence), (range: range(4, 5), reason: .noSpeech)])
         #expect(RemovalPlanner.index(containing: 1.5, in: ranges) == 0)
         #expect(RemovalPlanner.index(containing: 4, in: ranges) == 1)
         #expect(RemovalPlanner.index(containing: 2, in: ranges) == nil, "the end isn't inside")
@@ -94,6 +138,89 @@ struct RemovalPlannerTests {
         #expect(RemovalReason.noSpeech.title == "No speech")
         #expect(RemovalReason.cutWords("um so").title == "Cut words: “um so”")
         #expect(RemovalReason.cutWords(String(repeating: "a", count: 80)).title.count < 60, "long cuts are shortened")
+    }
+}
+
+struct RemovalHoverTests {
+
+    @Test func theCardShowsOnlyAfterResting() {
+        var hover = RemovalHover()
+        let first = hover.pointer(over: 2)
+        #expect(first == .dwell(part: 2))
+        #expect(hover.shown == nil, "not before the dwell")
+        let again = hover.pointer(over: 2)
+        #expect(again == nil, "moving along the same bar doesn't restart it")
+        hover.dwellElapsed(for: 2)
+        #expect(hover.shown == 2)
+    }
+
+    @Test func sweepingAcrossBarsShowsNothing() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 0)
+        _ = hover.pointer(over: 1)
+        _ = hover.pointer(over: nil)
+        hover.dwellElapsed(for: 0)
+        hover.dwellElapsed(for: 1)
+        #expect(hover.shown == nil)
+    }
+
+    @Test func movingAwayHidesItEvenWhileThePointerKeepsMoving() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 3)
+        hover.dwellElapsed(for: 3)
+        let leaving = hover.pointer(over: nil)
+        #expect(leaving == .grace)
+        var restarts = 0
+        for _ in 0..<50 where hover.pointer(over: nil) != nil {
+            restarts += 1
+        }
+        #expect(restarts == 0, "further movement never restarts the grace")
+        hover.graceElapsed()
+        #expect(hover.shown == nil)
+    }
+
+    @Test func theCardStaysWhileThePointerIsOnIt() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 1)
+        hover.dwellElapsed(for: 1)
+        let leaving = hover.pointer(over: nil)
+        #expect(leaving == .grace)
+        let entering = hover.card(isInside: true)
+        #expect(entering == nil)
+        hover.graceElapsed()
+        #expect(hover.shown == 1, "on the card")
+
+        let leavingCard = hover.card(isInside: false)
+        #expect(leavingCard == .grace)
+        hover.graceElapsed()
+        #expect(hover.shown == nil, "left the card")
+    }
+
+    @Test func backOnTheBarBeforeTheGraceEndsKeepsIt() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 1)
+        hover.dwellElapsed(for: 1)
+        _ = hover.pointer(over: nil)
+        _ = hover.pointer(over: 1)
+        hover.graceElapsed()
+        #expect(hover.shown == 1)
+    }
+
+    @Test func anotherBarSwitchesAtOnce() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 1)
+        hover.dwellElapsed(for: 1)
+        let timer = hover.pointer(over: 4)
+        #expect(timer == nil)
+        #expect(hover.shown == 4)
+    }
+
+    @Test func dismissHidesEverything() {
+        var hover = RemovalHover()
+        _ = hover.pointer(over: 1)
+        hover.dwellElapsed(for: 1)
+        hover.dismiss()
+        #expect(hover == RemovalHover())
     }
 }
 

@@ -48,9 +48,10 @@ final class EditorViewModel {
     private(set) var cutRanges: [CMTimeRange] = []
     /// Stretches without speech on the timeline (clips with a complete transcript only).
     private(set) var nonSpeechRanges: [CMTimeRange] = []
-    /// Everything left out of the edit, with why: sorted and non-overlapping.
+    /// Everything left out of the edit, with why: sorted, non-overlapping, and
+    /// split wherever the reason changes (what the timeline shows and hovers).
     private(set) var removedRanges: [RemovedRange] = []
-    /// What playback skips: `removedRanges` without the reasons.
+    /// What playback skips: `removedRanges` joined into whole stretches.
     private(set) var skipRanges: [CMTimeRange] = []
     /// Transcript lines at their timeline positions.
     private(set) var timelineTranscript: [TimelineSegment] = []
@@ -609,8 +610,9 @@ final class EditorViewModel {
         nonSpeechRanges = noSpeech
         tagged += noSpeech.map { (range: $0, reason: .noSpeech) }
 
-        removedRanges = RemovalPlanner.merge(tagged)
-        skipRanges = removedRanges.map(\.range)
+        removedRanges = RemovalPlanner.parts(tagged)
+        // Playback seeks once across a whole stretch, whatever its parts.
+        skipRanges = ClipTimeline.merged(removedRanges.map(\.range))
         installBoundaryObserver()
     }
 

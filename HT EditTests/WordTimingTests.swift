@@ -378,7 +378,7 @@ struct WordDeletionTests {
         model.toggleSelectedWords()
         #expect(model.deletedWordIDs == [words[1].id, words[2].id])
         #expect(model.wordCuts.count == 1, "neighbors make one cut")
-        #expect(model.removedRanges.first?.reasons == [.cutWords("two three")])
+        #expect(model.removedRanges.first?.reason == .cutWords("two three"))
 
         model.toggleSelectedWords()
         #expect(model.deletedWordIDs.isEmpty, "pressing it again restores them")
@@ -406,7 +406,7 @@ struct WordDeletionTests {
 
         // Speech 0.5–2.5 s: before and after it is cut, keeping 0.1 s next to the words.
         #expect(matches(model.nonSpeechRanges, [(0, 0.4), (2.6, 3)], tolerance: 0.001))
-        #expect(model.removedRanges.map(\.reasons) == [[.noSpeech], [.noSpeech]])
+        #expect(model.removedRanges.map(\.reason) == [.noSpeech, .noSpeech])
         #expect(model.skipRanges == model.removedRanges.map(\.range))
 
         model.cutsNonSpeech = false

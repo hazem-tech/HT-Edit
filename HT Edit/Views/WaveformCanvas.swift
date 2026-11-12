@@ -11,8 +11,9 @@ import SwiftUI
 /// independent of media length and clip count.
 ///
 /// Removed parts (silences, cut words, no speech) look disabled: a faint gray
-/// band with the waveform grayed out, and a gray bar along their top edge
-/// that the timeline shows a hover card for.
+/// band with the waveform grayed out, and a gray bar along each part's top
+/// edge that the timeline shows a hover card for. Parts are split wherever
+/// the reason changes, and each has its own bar.
 ///
 /// Inputs are plain values; SwiftUI only re-renders when they change, never
 /// on playhead movement (the playhead lives in its own overlay).
@@ -109,7 +110,10 @@ struct WaveformCanvas: View {
             guard x0.isFinite, x1.isFinite else { continue }
             let width = max(1, x1 - x0)
             area.addRect(CGRect(x: x0, y: wave.minY, width: width, height: wave.height))
-            let bar = CGRect(x: x0, y: wave.minY, width: width, height: Self.removedBarHeight)
+            // Each part has its own bar, with a hairline gap where parts touch,
+            // so the timeline shows where the reason changes.
+            let inset: CGFloat = width > 3 ? 0.5 : 0
+            let bar = CGRect(x: x0 + inset, y: wave.minY, width: width - 2 * inset, height: Self.removedBarHeight)
             if index == hoveredRemoval { hovered.addRect(bar) } else { bars.addRect(bar) }
         }
         return (area, bars, hovered)
