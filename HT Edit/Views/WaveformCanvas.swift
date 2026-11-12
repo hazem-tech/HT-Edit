@@ -32,6 +32,8 @@ struct WaveformCanvas: View {
 
     /// dBFS mapped to the bottom of the waveform; matches the threshold slider's minimum.
     static let floorDB = Float(SilenceSettings.thresholdRange.lowerBound)
+    /// The waveform: white in dark mode (and near-black in light mode, where white wouldn't show).
+    static let waveColor = Color.primary
     static let rulerHeight: CGFloat = 18
     /// The gray bar along the top of each removed part.
     static let removedBarHeight: CGFloat = 5
@@ -59,24 +61,20 @@ struct WaveformCanvas: View {
             context.fill(removedPath, with: .color(.gray.opacity(0.12)))
 
             var peaks = Path()
-            var rms = Path()
             for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
-                addWaveform(of: lane, wave: wave, visibleStart: visibleStart, peaks: &peaks, rms: &rms)
+                addWaveform(of: lane, wave: wave, visibleStart: visibleStart, peaks: &peaks)
             }
             if removedPath.isEmpty {
-                context.fill(peaks, with: .color(.accentColor.opacity(0.35)))
-                context.fill(rms, with: .color(.accentColor))
+                context.fill(peaks, with: .color(Self.waveColor))
             } else {
                 var kept = context
                 kept.clip(to: removedPath, options: .inverse)
-                kept.fill(peaks, with: .color(.accentColor.opacity(0.35)))
-                kept.fill(rms, with: .color(.accentColor))
+                kept.fill(peaks, with: .color(Self.waveColor))
 
                 var disabled = context
                 disabled.clip(to: removedPath)
                 disabled.opacity = Self.disabledOpacity
-                disabled.fill(peaks, with: .color(.gray.opacity(0.5)))
-                disabled.fill(rms, with: .color(.gray))
+                disabled.fill(peaks, with: .color(.gray))
             }
             context.fill(bars, with: .color(.gray.opacity(0.45)))
             if !hoveredBar.isEmpty {
@@ -120,8 +118,11 @@ struct WaveformCanvas: View {
     }
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for
-    /// the columns it covers on screen, adding its bars to `peaks` and `rms`.
-    private func addWaveform(of lane: ClipLane, wave: CGRect, visibleStart: Double, peaks peakPath: inout Path, rms rmsPath: inout Path) {
+    /// the columns it covers on screen, adding its bars to `peaks`.
+    ///
+    /// Only the peak level is drawn: it's what word cuts are placed by (the
+    /// quietest peak in a pause), so what you see is what cuts follow.
+    private func addWaveform(of lane: ClipLane, wave: CGRect, visibleStart: Double, peaks peakPath: inout Path) {
         let levels = lane.levels
         guard levels.windowCount > 0, levels.windowSeconds > 0 else { return }
         let laneMinX = max(0, xPosition(for: lane.start, visibleStart: visibleStart))
@@ -140,7 +141,6 @@ struct WaveformCanvas: View {
         guard windowsPerColumn.isFinite, startWindow.isFinite, abs(startWindow) < Double(Int.max / 4) else { return }
 
         let peaks = WaveformSampler.buckets(levels.peakDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
-        let rms = WaveformSampler.buckets(levels.rmsDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
 
         let midY = wave.midY
         let halfHeight = wave.height / 2 - 2
@@ -148,12 +148,8 @@ struct WaveformCanvas: View {
             let x = CGFloat(firstColumn + column) * Self.barStep
             guard x >= laneMinX - Self.barStep, x < laneMaxX else { continue }
             let peakHeight = CGFloat(WaveformSampler.normalized(peaks[column], floorDB: Self.floorDB)) * halfHeight
-            let rmsHeight = CGFloat(WaveformSampler.normalized(rms[column], floorDB: Self.floorDB)) * halfHeight
             if peakHeight > 0 {
                 peakPath.addRect(CGRect(x: x, y: midY - peakHeight, width: Self.barWidth, height: peakHeight * 2))
-            }
-            if rmsHeight > 0 {
-                rmsPath.addRect(CGRect(x: x, y: midY - rmsHeight, width: Self.barWidth, height: rmsHeight * 2))
             }
         }
     }

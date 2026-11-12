@@ -132,6 +132,10 @@ final class EditorViewModel {
     /// place without copying or re-rendering; `levelsRevision` publishes them.
     @ObservationIgnored private let levelsStore = LevelsStore()
     @ObservationIgnored private var clipTasks: [UUID: Task<Void, Never>] = [:]
+    /// Word cuts moved to the exact sample (`CutRefiner`), by the cut as first planned.
+    @ObservationIgnored private var refinedCuts: [String: WordCut] = [:]
+    /// Planned cuts whose samples are being read.
+    @ObservationIgnored private var refiningCuts: Set<String> = []
     @ObservationIgnored private var compositionTask: Task<Void, Never>?
     @ObservationIgnored private var compositionGeneration = 0
     @ObservationIgnored private var periodicObserver: Any?
@@ -213,6 +217,7 @@ final class EditorViewModel {
         for clip in clips where ids.contains(clip.id) {
             clipTasks.removeValue(forKey: clip.id)?.cancel()
             levelsStore.remove(clip.id)
+            refinedCuts = refinedCuts.filter { $0.value.clipID != clip.id }
             if let index = securityScopedURLs.firstIndex(of: clip.url) {
                 securityScopedURLs.remove(at: index).stopAccessingSecurityScopedResource()
             }
@@ -580,7 +585,7 @@ final class EditorViewModel {
         if deletedWordIDs.isEmpty {
             wordCuts = []
         } else {
-            wordCuts = placed.flatMap { clip in
+            let planned = placed.flatMap { clip in
                 WordCutPlanner.cuts(
                     clipID: clip.id,
                     words: wordsByClip[clip.id] ?? [],
@@ -589,6 +594,9 @@ final class EditorViewModel {
                     clipDuration: clip.duration.seconds
                 )
             }
+            // Planned from the 10 ms levels for now; on the exact sample once refined.
+            wordCuts = planned.map { refinedCuts[Self.refineKey($0)] ?? $0 }
+            refineCuts(planned)
         }
         var cuts: [CMTimeRange] = []
         for cut in wordCuts {
@@ -614,6 +622,38 @@ final class EditorViewModel {
         // Playback seeks once across a whole stretch, whatever its parts.
         skipRanges = ClipTimeline.merged(removedRanges.map(\.range))
         installBoundaryObserver()
+    }
+
+    /// Reads the samples around cuts not refined yet and moves them to the
+    /// exact sample, then re-plans what playback skips.
+    private func refineCuts(_ planned: [WordCut]) {
+        let urls = Dictionary(uniqueKeysWithValues: placedClips.map { ($0.id, $0.url) })
+        let pending = planned.filter { cut in
+            let key = Self.refineKey(cut)
+            return refinedCuts[key] == nil && !refiningCuts.contains(key) && urls[cut.clipID] != nil
+        }
+        guard !pending.isEmpty else { return }
+        refiningCuts.formUnion(pending.map(Self.refineKey))
+        Task {
+            for cut in pending {
+                let key = Self.refineKey(cut)
+                guard let url = urls[cut.clipID] else { continue }
+                do {
+                    refinedCuts[key] = try await CutRefiner.refine(cut, source: url)
+                } catch {
+                    // Keep the planned cut; it's already in the quietest 10 ms.
+                    Log.playback.error("Refining a cut failed: \(error.localizedDescription, privacy: .public)")
+                    refinedCuts[key] = cut
+                }
+                refiningCuts.remove(key)
+            }
+            recomputeSkips()
+        }
+    }
+
+    /// A planned cut's identity: its clip and where it was first placed.
+    private static func refineKey(_ cut: WordCut) -> String {
+        "\(cut.clipID.uuidString)|\(Int((cut.start * 10_000).rounded()))|\(Int((cut.end * 10_000).rounded()))"
     }
 
     /// Publishes stored levels to the UI and refreshes highlights.

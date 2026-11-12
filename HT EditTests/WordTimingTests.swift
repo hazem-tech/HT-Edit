@@ -436,3 +436,58 @@ struct WordDeletionTests {
         #expect(controller.needsRetry(for: model.placedClips))
     }
 }
+
+struct CutRefinerTests {
+    private let rate = 48_000.0
+
+    private func sine(_ seconds: Double, frequency: Double = 200, amplitude: Float = 0.5, phase: Double = 0) -> [Float] {
+        (0..<Int(seconds * rate)).map { Float(sin(2 * .pi * frequency * Double($0) / rate + phase)) * amplitude }
+    }
+
+    @Test func aClickInThePauseIsAvoided() throws {
+        // Tone 0–0.1 s, silence 0.1–0.15 s with a click at 0.12 s, tone 0.15–0.25 s.
+        var samples = sine(0.1) + [Float](repeating: 0, count: Int(0.05 * rate)) + sine(0.1)
+        samples[Int(0.12 * rate)] = 0.9
+        let point = try #require(CutRefiner.point(in: samples, sampleRate: rate, startTime: 0, search: 0.08...0.17, preferred: 0.12))
+        #expect((0.1...0.15).contains(point.time), "in the silence")
+        #expect(abs(point.time - 0.12) > 0.001, "not on the click")
+    }
+
+    @Test func theCutLandsOnAZeroCrossing() throws {
+        let samples = sine(0.2, frequency: 100, phase: 0.3)
+        let point = try #require(CutRefiner.point(in: samples, sampleRate: rate, startTime: 10, search: 10.05...10.15, preferred: 10.1))
+        let index = Int(((point.time - 10) * rate).rounded())
+        #expect(abs(samples[index]) < 0.01, "the wave is at zero there")
+        #expect(abs(point.time - 10.1) < 0.006, "the crossing nearest the middle")
+        #expect(point.rising != nil)
+    }
+
+    @Test func theEndPointCrossesTheSameWayAsTheStart() throws {
+        // 200 Hz: every 5 ms stretch has one rising and one falling crossing.
+        let samples = sine(0.2, frequency: 200)
+        for direction in [true, false] {
+            let point = try #require(CutRefiner.point(in: samples, sampleRate: rate, startTime: 0, search: 0.05...0.15, preferred: 0.1, direction: direction))
+            #expect(point.rising == direction)
+        }
+    }
+
+    @Test func digitalSilenceTakesTheQuietestSample() throws {
+        let samples = [Float](repeating: 0, count: Int(0.1 * rate))
+        let point = try #require(CutRefiner.point(in: samples, sampleRate: rate, startTime: 0, search: 0.02...0.08, preferred: 0.05))
+        #expect(abs(point.time - 0.05) < 0.005)
+        #expect(point.rising == nil)
+    }
+
+    @Test func refiningReadsTheFileAndStaysInTheSearchRange() async throws {
+        let directory = makeTemporaryDirectory("refine")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let planned = WordCut(
+            clipID: UUID(), start: 1.0, end: 2.0, isTight: false,
+            startSearch: 0.9...1.1, startPreferred: 1.0, endSearch: 1.9...2.1, endPreferred: 2.0
+        )
+        let refined = try await CutRefiner.refine(planned, source: audio)
+        #expect((0.9...1.1).contains(refined.start))
+        #expect((1.9...2.1).contains(refined.end))
+    }
+}
