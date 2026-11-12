@@ -22,7 +22,7 @@ actor TranscriptCache {
     }
 
     /// Word timing of transcripts with measured word times. Bump when the aligner changes.
-    nonisolated static let alignedWordTiming = "words-mms-1"
+    nonisolated static let alignedWordTiming = "words-mms-2"
 
     /// - Parameter wordTiming: how word times were found: empty when they're
     ///   estimated, `alignedWordTiming` when they're measured. Installing the

@@ -5,8 +5,8 @@
 # Run once on your Mac:
 #   zsh scripts/align-probe.sh
 #
-# The first run downloads a private Python, PyTorch and the alignment model
-# (about 1.5–2 GB in all) into uv's and PyTorch's caches; later runs are offline.
+# The first run downloads a private Python, PyTorch and the alignment model (from Hugging Face)
+# (about 2–3 GB in all) into uv's and Hugging Face's caches; later runs are offline.
 # It runs the same command HT Edit runs (see UVWordAligner in
 # "HT Edit/Transcription/WordAligner.swift"); keep the two in sync.
 

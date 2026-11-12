@@ -3,6 +3,7 @@
 # dependencies = [
 #     "torch==2.8.0",
 #     "torchaudio==2.8.0",
+#     "transformers>=4.50,<5",
 #     "uroman==1.3.1.1",
 #     "numpy",
 #     "truststore>=0.10",
@@ -14,6 +15,10 @@ HT Edit already has the words (from Gemini) and roughly when each sentence
 was said. This script finds, from the waveform itself, where each word starts
 and ends. It uses Meta's MMS forced-alignment model (wav2vec2, trained on
 1,100+ languages, Arabic included), which listens in 20 ms frames.
+
+The weights are torchaudio's MMS_FA checkpoint converted to Transformers, from
+Hugging Face (pinned to one revision). Meta's own download server serves an
+expired certificate, so torchaudio's built-in download can't be used.
 
 Run by HT Edit through uv, which installs a private Python and these
 dependencies on first use (nothing touches the system Python):
@@ -42,6 +47,8 @@ import warnings
 import wave
 
 SAMPLE_RATE = 16_000
+MODEL_REPO = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+MODEL_REVISION = "49402e9577b1158620820667c218cd494cc44486"
 # Below these average letter confidences the text wasn't found in the audio
 # (wrong line times, say): better to estimate than to trust the placement.
 # Real speech scores well above them, even sung or recited.
@@ -85,10 +92,15 @@ class Romanizer:
 
 def load_model():
     import torch
-    import torchaudio
+    from transformers import Wav2Vec2CTCTokenizer, Wav2Vec2ForCTC
+    from transformers.utils import logging as transformers_logging
 
-    bundle = torchaudio.pipelines.MMS_FA
-    model = bundle.get_model(with_star=False)
+    transformers_logging.set_verbosity_error()
+    log("Loading the alignment model (the first time it downloads about 1.3 GB from Hugging Face)")
+    model = Wav2Vec2ForCTC.from_pretrained(MODEL_REPO, revision=MODEL_REVISION, use_safetensors=True)
+    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(MODEL_REPO, revision=MODEL_REVISION)
+    # Letters only; id 0 is the blank. <pad>, </s> and <unk> are never targets.
+    dictionary = {token: index for token, index in tokenizer.get_vocab().items() if len(token) == 1}
     device = "cpu"
     if torch.backends.mps.is_available():
         try:
@@ -97,7 +109,6 @@ def load_model():
         except Exception as error:  # noqa: BLE001 - any failure: stay on the CPU
             log(f"MPS unavailable ({error}); using the CPU")
     model.eval()
-    dictionary = bundle.get_dict(star=None)
     return model, dictionary, device
 
 
@@ -112,9 +123,11 @@ def emission_for(model, device, samples):
     import torch
 
     with torch.inference_mode():
-        waveform = torch.from_numpy(samples).unsqueeze(0).to(device)
-        emission, _ = model(waveform)
-        emission = torch.log_softmax(emission.float(), dim=-1).cpu()[0]
+        waveform = torch.from_numpy(samples).unsqueeze(0)
+        # Zero mean, unit variance: what the model was trained on.
+        waveform = torch.nn.functional.layer_norm(waveform, waveform.shape).to(device)
+        logits = model(waveform).logits
+        emission = torch.log_softmax(logits.float(), dim=-1).cpu()[0]
     star = torch.zeros((emission.shape[0], 1))
     return torch.cat([emission, star], dim=1)
 
