@@ -7,28 +7,36 @@ import AppKit
 import CoreMedia
 import SwiftUI
 
-/// Inspector tab: pick a model, add optional context, transcribe, and read
-/// the timestamped transcript. Clicking a line's time jumps the player there.
+/// Inspector tab: the timestamped transcript, filled in automatically as
+/// soon as a clip is imported. Clicking a line's time jumps the player there.
+/// A Retry button appears only if transcription failed or was cancelled.
 ///
 /// Every word can be selected and deleted: playback then skips it, cut at the
 /// quietest point of the pauses around it. Click a word to select it (and
 /// jump there), Shift-click to extend, Command-click to add or remove one.
+/// ⌫ cuts the selection, or restores it if it's all cut already.
 struct TranscriptPanel: View {
     @Bindable var model: EditorViewModel
-    @State private var selection: Set<String> = []
-    @State private var anchor: Int?
 
     private var controller: TranscriptionController { model.transcription }
 
     var body: some View {
-        @Bindable var transcription = model.transcription
+        #if DEBUG
+        let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
+        #endif
+        // Nothing here reads the playhead: only `TranscriptRows` follows it.
         let segments = model.timelineTranscript
         Form {
             if let banner = EngineBanner(status: controller.engineStatus) {
                 Section {
                     banner
                     Button("Check Again") {
-                        Task { await controller.refreshStatus() }
+                        Task {
+                            await controller.refreshStatus()
+                            if case .ready = controller.engineStatus, controller.needsRetry(for: model.placedClips) {
+                                model.retryTranscription()
+                            }
+                        }
                     }
                     .accessibilityIdentifier("checkAgainButton")
                 }
@@ -42,36 +50,26 @@ struct TranscriptPanel: View {
                     }
                 }
                 .accessibilityIdentifier("transcriptModelPicker")
-
-                TextField("Context", text: $transcription.context, prompt: Text("Names, terms or spellings (optional)"), axis: .vertical)
-                    .lineLimit(2...5)
-                    .accessibilityIdentifier("transcriptContextField")
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Runs on Antigravity with your Google account. Only models that can transcribe audio with timestamps are listed.")
+                Text("Clips are transcribed automatically on Antigravity, with your Google account. Only models that can transcribe audio with timestamps are listed; picking another one transcribes again.")
                     .foregroundStyle(.secondary)
             }
 
-            Section {
-                runControls
+            if controller.isRunning || controller.needsRetry(for: model.placedClips) {
+                Section {
+                    runControls
+                }
             }
 
             Section {
                 if segments.isEmpty {
-                    Text(controller.isRunning ? "Transcribing…" : "Press Transcribe to get a timestamped transcript.")
+                    Text(controller.isRunning ? "Transcribing…" : "The transcript appears here automatically.")
                         .foregroundStyle(.secondary)
                 } else {
-                    editControls(words: segments.flatMap(\.words))
-                    TranscriptRows(
-                        segments: segments,
-                        activeIndex: TranscriptTimeline.activeIndex(at: model.currentTime.seconds, in: segments),
-                        time: model.currentTime.seconds,
-                        selection: selection,
-                        deleted: model.deletedWordIDs,
-                        onSelectLine: { model.seek(toSeconds: $0.start) },
-                        onSelectWord: { index in select(index, in: segments.flatMap(\.words)) }
-                    )
+                    editControls
+                    TranscriptRows(model: model, segments: segments)
                 }
             } header: {
                 HStack {
@@ -100,6 +98,7 @@ struct TranscriptPanel: View {
         }
     }
 
+    /// Progress while transcribing; otherwise why it stopped, and Retry.
     @ViewBuilder
     private var runControls: some View {
         if controller.isRunning {
@@ -109,44 +108,42 @@ struct TranscriptPanel: View {
                 Button("Cancel") { controller.cancel() }
             }
         } else {
-            Button(model.timelineTranscript.isEmpty ? "Transcribe" : "Transcribe Again", systemImage: "waveform.and.mic") {
-                selection = []
-                anchor = nil
-                model.transcribeAll()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.placedClips.isEmpty || controller.engineStatus == .checking)
-            .accessibilityIdentifier("transcribeButton")
-        }
-
-        if case .failed(let message) = controller.phase {
-            Label(message, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.red)
-                .accessibilityIdentifier("transcriptError")
-        }
-        if controller.hasFailedChunks, !controller.isRunning {
             VStack(alignment: .leading, spacing: 6) {
-                Label("Some parts couldn't be transcribed.", systemImage: "exclamationmark.triangle")
-                if let message = controller.lastFailureMessage {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
+                if let message = failureMessage {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("transcriptError")
                 }
-                Button("Retry Failed Parts") { controller.retryFailedChunks(model.placedClips) }
+                if controller.hasFailedChunks, let detail = controller.lastFailureMessage {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Retry", systemImage: "arrow.clockwise") { model.retryTranscription() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(controller.engineStatus == .checking)
+                    .accessibilityIdentifier("transcriptRetryButton")
             }
+        }
+    }
+
+    private var failureMessage: String? {
+        switch controller.phase {
+        case .failed(let message): message
+        case .cancelled: "Transcription was cancelled."
+        default: controller.hasFailedChunks ? "Some parts couldn't be transcribed." : "Transcription didn't finish."
         }
     }
 
     /// Delete or restore the selected words, and restore everything.
     @ViewBuilder
-    private func editControls(words: [TimelineWord]) -> some View {
-        let selected = selection.intersection(words.map(\.id))
+    private var editControls: some View {
+        let selected = model.selectedWordIDs
         let allDeleted = !selected.isEmpty && selected.isSubset(of: model.deletedWordIDs)
         HStack {
             Button(allDeleted ? "Restore" : "Delete", systemImage: allDeleted ? "arrow.uturn.backward" : "scissors") {
-                model.toggleDeletion(of: selected)
+                model.toggleSelectedWords()
             }
-            .keyboardShortcut(.delete, modifiers: .command)
             .disabled(selected.isEmpty)
-            .help(allDeleted ? "Put the selected words back (⌘⌫)" : "Cut the selected words: playback skips them (⌘⌫)")
+            .help(allDeleted ? "Put the selected words back (⌫)" : "Cut the selected words: playback skips them (⌫)")
             .accessibilityIdentifier("deleteWordsButton")
 
             Text(selected.isEmpty ? "Select words to cut them." : "\(selected.count) word\(selected.count == 1 ? "" : "s") selected")
@@ -160,24 +157,6 @@ struct TranscriptPanel: View {
         }
     }
 
-    /// Click: select one word and jump there. Shift: extend from the last
-    /// click. Command: add or remove one word.
-    private func select(_ index: Int, in words: [TimelineWord]) {
-        guard words.indices.contains(index) else { return }
-        let id = words[index].id
-        let modifiers = NSEvent.modifierFlags
-        if modifiers.contains(.shift), let anchor, words.indices.contains(anchor) {
-            selection = Set(words[min(anchor, index)...max(anchor, index)].map(\.id))
-        } else if modifiers.contains(.command) {
-            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-            anchor = index
-        } else {
-            selection = [id]
-            anchor = index
-            model.seek(toSeconds: words[index].start)
-        }
-    }
-
     private var modelSelection: Binding<String> {
         Binding(
             get: { controller.selectedModel.id },
@@ -186,65 +165,109 @@ struct TranscriptPanel: View {
     }
 }
 
-/// The transcript lines. A separate view so playback ticks only redraw the rows.
-///
-/// Each line is one `Text`, with every word a link: the system lays it out,
-/// so Arabic letters join and lines wrap right to left as they should.
+/// The transcript lines. The only part of the tab that follows the playhead:
+/// each tick it finds the active line and word, and only rows whose inputs
+/// changed are drawn again.
 private struct TranscriptRows: View {
+    let model: EditorViewModel
     let segments: [TimelineSegment]
-    let activeIndex: Int?
-    /// Playhead, timeline seconds.
-    let time: Double
-    let selection: Set<String>
-    let deleted: Set<String>
-    let onSelectLine: (TimelineSegment) -> Void
-    /// Index of the clicked word among all the lines' words.
-    let onSelectWord: (Int) -> Void
-
-    static let scheme = "htedit-word"
 
     var body: some View {
-        let firstWord = Self.firstWordIndices(segments)
+        let time = model.currentTime.seconds
+        let activeIndex = TranscriptTimeline.activeIndex(at: time, in: segments)
+        let activeWordID = activeIndex.flatMap { index in
+            segments[index].words.first { $0.start <= time && time < $0.end }?.id
+        }
+        let firstWord = TranscriptRow.firstWordIndices(segments)
+        let selection = model.selectedWordIDs
+        let deleted = model.deletedWordIDs
         ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-            let rightToLeft = Self.isRightToLeft(segment.text)
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Button { onSelectLine(segment) } label: {
-                    Text(TimeFormatting.string(segment.start, fractionDigits: 0))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Jump to this line")
-
-                line(segment, firstWord: firstWord[index], isActive: index == activeIndex)
-                    .multilineTextAlignment(rightToLeft ? .trailing : .leading)
-                    .frame(maxWidth: .infinity, alignment: rightToLeft ? .trailing : .leading)
-                    .tint(.primary)
-                    .environment(\.openURL, OpenURLAction { url in
-                        guard url.scheme == Self.scheme, let word = Int(url.host() ?? url.path()) else { return .systemAction }
-                        onSelectWord(word)
-                        return .handled
-                    })
-            }
-            .listRowBackground(index == activeIndex ? Color.accentColor.opacity(0.08) : nil)
+            let isActive = index == activeIndex
+            TranscriptRow(
+                model: model,
+                state: TranscriptRow.RowState(
+                    segment: segment,
+                    firstWord: firstWord[index],
+                    isActive: isActive,
+                    activeWordID: isActive ? activeWordID : nil,
+                    selection: selection,
+                    deleted: deleted
+                )
+            )
+            .equatable()
+            .listRowBackground(isActive ? Color.accentColor.opacity(0.08) : nil)
             .accessibilityIdentifier("transcriptRow")
         }
     }
+}
 
-    private func line(_ segment: TimelineSegment, firstWord: Int, isActive: Bool) -> Text {
+/// One transcript line.
+///
+/// One `Text`, with every word a link: the system lays it out, so Arabic
+/// letters join and lines wrap right to left as they should.
+private struct TranscriptRow: View, Equatable {
+    /// Everything the row draws; rows are only redrawn when it changes.
+    nonisolated struct RowState: Equatable, Sendable {
+        var segment: TimelineSegment
+        /// Index of the line's first word among all the lines' words.
+        var firstWord: Int
+        var isActive: Bool
+        /// The word being spoken, on the active line only.
+        var activeWordID: String?
+        var selection: Set<String>
+        var deleted: Set<String>
+    }
+
+    let model: EditorViewModel
+    let state: RowState
+
+    static let scheme = "htedit-word"
+
+    nonisolated static func == (lhs: TranscriptRow, rhs: TranscriptRow) -> Bool {
+        lhs.state == rhs.state
+    }
+
+    var body: some View {
+        let segment = state.segment
+        let rightToLeft = Self.isRightToLeft(segment.text)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button { model.seek(toSeconds: segment.start) } label: {
+                Text(TimeFormatting.string(segment.start, fractionDigits: 0))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Jump to this line")
+
+            line
+                .multilineTextAlignment(rightToLeft ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: rightToLeft ? .trailing : .leading)
+                .tint(.primary)
+                .environment(\.openURL, OpenURLAction { [model] url in
+                    guard url.scheme == Self.scheme, let word = Int(url.host() ?? url.path()) else { return .systemAction }
+                    let modifiers = NSEvent.modifierFlags
+                    model.selectWord(at: word, extending: modifiers.contains(.shift), toggling: modifiers.contains(.command))
+                    return .handled
+                })
+        }
+    }
+
+    private var line: Text {
+        let segment = state.segment
         guard !segment.words.isEmpty else { return Text(segment.text) }
         var text = AttributedString()
         for (offset, word) in segment.words.enumerated() {
             if offset > 0 { text += AttributedString(" ") }
             var run = AttributedString(word.text)
-            run.link = URL(string: "\(Self.scheme)://\(firstWord + offset)")
-            if deleted.contains(word.id) {
+            run.link = URL(string: "\(Self.scheme)://\(state.firstWord + offset)")
+            if state.deleted.contains(word.id) {
+                // Cut words look disabled, like removed parts on the timeline.
                 run.strikethroughStyle = Text.LineStyle.single
-                run.foregroundColor = Color.secondary
+                run.foregroundColor = Color.primary.opacity(WaveformCanvas.disabledOpacity)
             }
-            if selection.contains(word.id) {
+            if state.selection.contains(word.id) {
                 run.backgroundColor = Color.accentColor.opacity(0.35)
-            } else if isActive, word.start <= time, time < word.end {
+            } else if word.id == state.activeWordID {
                 run.backgroundColor = Color.accentColor.opacity(0.18)
             }
             if word.isApproximate {

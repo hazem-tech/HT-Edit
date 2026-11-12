@@ -32,12 +32,18 @@ xattr -dr com.apple.quarantine "/Applications/HT Edit.app"
 
 - **Import:** ⌘O, the **+** toolbar button, or drag and drop. You can import several files at once; new clips are added to the end.
 - **One seamless timeline:** a yellow line marks where each clip starts.
-- **Clip sidebar:** shows each clip's thumbnail, name and length. Drag clips to reorder them. Show or hide it with the system sidebar button.
+- **Clip sidebar:** shows each clip's thumbnail, name and length. Drag clips to reorder them. It's hidden at launch: show it with the sidebar button or **View ▸ Show Sidebar** (⌃⌘S).
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
-- **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
-- **Playback:** always skips the highlighted silences.
-- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
-- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Then press **Delete** (⌘⌫). Playback skips the deleted words, and they're shown struck through in the transcript and in purple on the waveform. Select deleted words and press **Restore** to put them back, or use **Restore All**.
+- **Live settings:** threshold (dB), padding start and padding end. The timeline updates instantly.
+- **Removed parts look disabled:** everything playback skips (silences, cut words, and parts without speech) is grayed out on the timeline, at 30% opacity. Hover the gray bar along the top of a removed part to see why it was removed, with a **Preview** button that plays just that part.
+- **Playback:** always skips the removed parts.
+- **Automatic transcript with timestamps:** each clip is transcribed as soon as it's imported; there's no button to press. A **Retry** button appears in the **Transcript** tab only if transcription failed or was cancelled. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Only speech is kept:** once a clip's transcript and word timing are done, everything that isn't speech is cut: before the first word, after the last, and every pause of 0.3 s or more between words (0.1 s is kept next to each word). Silences and noises that aren't words go too. Turn it off with **Cut parts without speech** in the **Silence** tab.
+- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Then press **⌫**: playback skips the deleted words, and they're struck through and dimmed in the transcript. Press **⌫** again on cut words to put them back, or use **Restore All**.
+- **Markers:** press **M** to drop a blue marker at the playhead.
+- **Keyboard:** **Space** plays and pauses, **M** adds a marker and **⌫** cuts or restores the selected words, whatever has focus, except while typing in a text field. (While the clip sidebar has focus, ⌫ still deletes clips.)
+- **Smooth scrolling during playback:** the timeline pages along with the playhead, but once you scroll it yourself it stays where you put it until you start playback again.
+- **Zoom:** pinch on the trackpad, or use the zoom bar under the timeline: a logarithmic slider, **−**/**+** and **Fit**. Zooming keeps the playhead (or the middle of the view) in place.
 
 ## Transcription
 
@@ -45,17 +51,16 @@ Transcription runs through your own **Antigravity CLI (`agy`)**, under your Goog
 
 **One-time setup:** install the Antigravity CLI and sign in once with your Google account (run `agy` in Terminal). That's all.
 
-**Every time:** everything happens in HT Edit.
-1. Open the **Transcript** tab and press **Transcribe**.
-2. Optional: pick another **model**. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered.
-3. Optional: type **context**, such as names, jargon or spellings. It's empty by default.
+**Every time:** nothing to do. Each clip is transcribed as soon as it's imported.
+- Optional: pick another **model** in the **Transcript** tab. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered, and picking another model transcribes the clips again.
+- If something goes wrong (Antigravity isn't signed in, or a part failed), the tab says why and shows **Retry**.
 
 How it works:
 - Each clip's audio is cut into 3-minute chunks (`.m4a`).
 - HT Edit runs `agy -p … --output-format json --json-schema …` on two chunks at a time.
 - The timestamped segments are placed on the timeline as they arrive.
 - A failed chunk is retried once; anything that still fails can be retried on its own.
-- Finished transcripts are cached per file, model and context. Transcribing the same file again shows the text at once. If its word times were estimated, only the word timing runs again, not the transcription.
+- Finished transcripts are cached per file and model. Importing the same file again shows the text at once. If its word times were estimated, only the word timing runs again, not the transcription.
 
 ### Word timing
 
@@ -91,8 +96,8 @@ Running `agy` and reading your sign-in means HT Edit runs **without the App Sand
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
 | Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
-| Word timing and cuts | `Transcription/WordAligner.swift` (runs `align.py` through `uv`), `Transcription/align.py` (MMS forced alignment), `Model/TranscriptWords.swift`, `Model/WordCuts.swift` (cuts snapped to the quietest point of each pause) |
-| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
+| Word timing and cuts | `Transcription/WordAligner.swift` (runs `align.py` through `uv`), `Transcription/align.py` (MMS forced alignment), `Model/TranscriptWords.swift`, `Model/WordCuts.swift` (cuts snapped to the quietest point of each pause), `Model/NonSpeech.swift` (what isn't speech), `Model/RemovedRanges.swift` (everything removed, and why) |
+| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`, `EditorKeyMonitor` for Space/M/⌫, `TimelineZoom`), `Model/Marker.swift`, `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
 
@@ -108,7 +113,8 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 - The build treats **all warnings as errors**, so deprecated APIs and concurrency warnings fail CI.
 - Unit tests include end-to-end imports of generated H.264, HEVC, portrait and audio-only files. They check that playback becomes ready, that frames are not black, that analysis finishes, and that silences are found.
 - Transcription tests run the real `agy` runner against fake `agy` scripts: success, signed out, errors, hangs, cancellation and large output. They also cover the chunking, the limit of two requests at a time, the retry and the cache, using real exported audio. CI has no Google sign-in, so a real transcription is checked by hand with `scripts/agy-probe.sh`.
-- UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which makes the app generate and import a file. They check the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, and the **+** and Import buttons. With `-UITestFakeTranscription 1`, a built-in fake stands in for Antigravity, and the Transcript tab is tested end to end.
+- UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which makes the app generate and import a file, and with `-UITestFakeTranscription 1`, so a built-in fake stands in for Antigravity (imports transcribe automatically). They check that the sidebar starts hidden, the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, Space while the clip list has focus, the **+** and Import buttons, and that the transcript fills in by itself.
+- The shared test model is one constant, `testModelID` in `HT EditTests/TestSupport.swift`.
 
 ### Releases
 

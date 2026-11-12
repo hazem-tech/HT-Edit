@@ -6,17 +6,24 @@
 import CoreMedia
 import SwiftUI
 
-/// Draws the ruler, waveform, silence and cut-word highlights, clip boundaries and threshold
-/// line for the visible slice of the timeline only, so cost is independent of
-/// media length and clip count.
+/// Draws the ruler, waveform, removed parts, markers, clip boundaries and
+/// threshold line for the visible slice of the timeline only, so cost is
+/// independent of media length and clip count.
+///
+/// Removed parts (silences, cut words, no speech) look disabled: a faint gray
+/// band with the waveform grayed out, and a gray bar along their top edge
+/// that the timeline shows a hover card for.
 ///
 /// Inputs are plain values; SwiftUI only re-renders when they change, never
 /// on playhead movement (the playhead lives in its own overlay).
 struct WaveformCanvas: View {
     let lanes: [ClipLane]
-    let silences: [CMTimeRange]
-    /// Words deleted in the transcript, sorted.
-    var cuts: [CMTimeRange] = []
+    /// Everything left out of the edit, sorted.
+    var removed: [RemovedRange] = []
+    /// Marker positions, timeline seconds.
+    var markerTimes: [Double] = []
+    /// Index in `removed` whose top bar is hovered.
+    var hoveredRemoval: Int? = nil
     let thresholdDB: Double
     /// Horizontal scroll offset of the visible slice, in points.
     let offset: CGFloat
@@ -25,26 +32,60 @@ struct WaveformCanvas: View {
     /// dBFS mapped to the bottom of the waveform; matches the threshold slider's minimum.
     static let floorDB = Float(SilenceSettings.thresholdRange.lowerBound)
     static let rulerHeight: CGFloat = 18
+    /// The gray bar along the top of each removed part.
+    static let removedBarHeight: CGFloat = 5
+    /// How far below the ruler the pointer counts as hovering that bar.
+    static let hoverStripHeight: CGFloat = 14
+    /// Removed parts are drawn at this opacity.
+    static let disabledOpacity = 0.3
     private static let barStep: CGFloat = 2
     private static let barWidth: CGFloat = 1.5
     private static let tickSteps: [Double] = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800]
+    private static let maximumTicks = 2_000
 
     var body: some View {
         Canvas { context, size in
-            guard pixelsPerSecond > 0, size.width > 0 else { return }
+            guard pixelsPerSecond.isFinite, pixelsPerSecond > 0, offset.isFinite,
+                  size.width > 0, size.height > Self.rulerHeight else { return }
             let visibleStart = Double(offset / pixelsPerSecond)
             let visibleEnd = visibleStart + Double(size.width / pixelsPerSecond)
+            guard visibleStart.isFinite, visibleEnd.isFinite else { return }
             let wave = CGRect(x: 0, y: Self.rulerHeight, width: size.width, height: size.height - Self.rulerHeight)
 
             context.fill(Path(roundedRect: wave, cornerRadius: 6), with: .color(.secondary.opacity(0.08)))
-            drawRanges(silences, color: .red, in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
-            drawRanges(cuts, color: .purple, in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
+
+            let (removedPath, bars, hoveredBar) = removedShapes(wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            context.fill(removedPath, with: .color(.gray.opacity(0.12)))
+
+            var peaks = Path()
+            var rms = Path()
             for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
-                drawWaveform(of: lane, in: &context, wave: wave, visibleStart: visibleStart)
+                addWaveform(of: lane, wave: wave, visibleStart: visibleStart, peaks: &peaks, rms: &rms)
             }
+            if removedPath.isEmpty {
+                context.fill(peaks, with: .color(.accentColor.opacity(0.35)))
+                context.fill(rms, with: .color(.accentColor))
+            } else {
+                var kept = context
+                kept.clip(to: removedPath, options: .inverse)
+                kept.fill(peaks, with: .color(.accentColor.opacity(0.35)))
+                kept.fill(rms, with: .color(.accentColor))
+
+                var disabled = context
+                disabled.clip(to: removedPath)
+                disabled.opacity = Self.disabledOpacity
+                disabled.fill(peaks, with: .color(.gray.opacity(0.5)))
+                disabled.fill(rms, with: .color(.gray))
+            }
+            context.fill(bars, with: .color(.gray.opacity(0.45)))
+            if !hoveredBar.isEmpty {
+                context.fill(hoveredBar, with: .color(.gray.opacity(0.9)))
+            }
+
             drawThreshold(in: &context, wave: wave)
             drawClipBoundaries(in: &context, height: size.height, visibleStart: visibleStart, visibleEnd: visibleEnd)
             drawRuler(in: &context, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            drawMarkers(in: &context, height: size.height, visibleStart: visibleStart, visibleEnd: visibleEnd)
         }
     }
 
@@ -52,34 +93,36 @@ struct WaveformCanvas: View {
         CGFloat(seconds - visibleStart) * pixelsPerSecond
     }
 
-    /// Highlights sorted `ranges`: a tinted band with a strong top edge.
-    private func drawRanges(_ ranges: [CMTimeRange], color: Color, in context: inout GraphicsContext, wave: CGRect, visibleStart: Double, visibleEnd: Double) {
-        guard !ranges.isEmpty else { return }
-        var fill = Path()
-        var edges = Path()
-        for range in ranges {
-            let start = range.start.seconds
-            let end = range.end.seconds
-            if end < visibleStart { continue }
+    /// The visible removed parts over the wave area, their top bars, and the hovered bar.
+    private func removedShapes(wave: CGRect, visibleStart: Double, visibleEnd: Double) -> (area: Path, bars: Path, hovered: Path) {
+        var area = Path()
+        var bars = Path()
+        var hovered = Path()
+        guard !removed.isEmpty else { return (area, bars, hovered) }
+        for index in RemovalPlanner.firstIndex(endingAfter: visibleStart, in: removed)..<removed.count {
+            let start = removed[index].range.start.seconds
+            let end = removed[index].range.end.seconds
             if start > visibleEnd { break }
-            let x0 = xPosition(for: start, visibleStart: visibleStart)
-            let x1 = xPosition(for: end, visibleStart: visibleStart)
-            let rect = CGRect(x: x0, y: wave.minY, width: max(1, x1 - x0), height: wave.height)
-            fill.addRect(rect)
-            edges.addRect(CGRect(x: rect.minX, y: wave.minY, width: rect.width, height: 3))
+            if end < visibleStart { continue }
+            let x0 = max(-1, xPosition(for: start, visibleStart: visibleStart))
+            let x1 = min(wave.width + 1, xPosition(for: end, visibleStart: visibleStart))
+            guard x0.isFinite, x1.isFinite else { continue }
+            let width = max(1, x1 - x0)
+            area.addRect(CGRect(x: x0, y: wave.minY, width: width, height: wave.height))
+            let bar = CGRect(x: x0, y: wave.minY, width: width, height: Self.removedBarHeight)
+            if index == hoveredRemoval { hovered.addRect(bar) } else { bars.addRect(bar) }
         }
-        context.fill(fill, with: .color(color.opacity(0.22)))
-        context.fill(edges, with: .color(color.opacity(0.8)))
+        return (area, bars, hovered)
     }
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for
-    /// the columns it covers on screen.
-    private func drawWaveform(of lane: ClipLane, in context: inout GraphicsContext, wave: CGRect, visibleStart: Double) {
+    /// the columns it covers on screen, adding its bars to `peaks` and `rms`.
+    private func addWaveform(of lane: ClipLane, wave: CGRect, visibleStart: Double, peaks peakPath: inout Path, rms rmsPath: inout Path) {
         let levels = lane.levels
-        guard levels.windowCount > 0 else { return }
+        guard levels.windowCount > 0, levels.windowSeconds > 0 else { return }
         let laneMinX = max(0, xPosition(for: lane.start, visibleStart: visibleStart))
         let laneMaxX = min(wave.width, xPosition(for: lane.start + lane.duration, visibleStart: visibleStart))
-        guard laneMaxX > laneMinX else { return }
+        guard laneMinX.isFinite, laneMaxX.isFinite, laneMaxX > laneMinX else { return }
 
         let firstColumn = Int((laneMinX / Self.barStep).rounded(.down))
         let lastColumn = Int((laneMaxX / Self.barStep).rounded(.up))
@@ -90,14 +133,13 @@ struct WaveformCanvas: View {
         let windowsPerColumn = Double(Self.barStep / pixelsPerSecond) / windowSeconds
         let columnStartTime = visibleStart + Double(CGFloat(firstColumn) * Self.barStep / pixelsPerSecond)
         let startWindow = (columnStartTime - lane.start) / windowSeconds
+        guard windowsPerColumn.isFinite, startWindow.isFinite, abs(startWindow) < Double(Int.max / 4) else { return }
 
         let peaks = WaveformSampler.buckets(levels.peakDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
         let rms = WaveformSampler.buckets(levels.rmsDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
 
         let midY = wave.midY
         let halfHeight = wave.height / 2 - 2
-        var peakPath = Path()
-        var rmsPath = Path()
         for column in 0..<columns {
             let x = CGFloat(firstColumn + column) * Self.barStep
             guard x >= laneMinX - Self.barStep, x < laneMaxX else { continue }
@@ -110,8 +152,6 @@ struct WaveformCanvas: View {
                 rmsPath.addRect(CGRect(x: x, y: midY - rmsHeight, width: Self.barWidth, height: rmsHeight * 2))
             }
         }
-        context.fill(peakPath, with: .color(.accentColor.opacity(0.35)))
-        context.fill(rmsPath, with: .color(.accentColor))
     }
 
     /// The threshold drawn on the same dB scale as the waveform, so users can see
@@ -142,7 +182,9 @@ struct WaveformCanvas: View {
         let fractionDigits = step < 1 ? (step < 0.25 ? 1 : 2) : 0
         var ticks = Path()
         var tick = (visibleStart / step).rounded(.down) * step
-        while tick <= visibleEnd {
+        var count = 0
+        while tick <= visibleEnd, count < Self.maximumTicks {
+            count += 1
             let x = xPosition(for: tick, visibleStart: visibleStart)
             ticks.move(to: CGPoint(x: x, y: Self.rulerHeight - 6))
             ticks.addLine(to: CGPoint(x: x, y: Self.rulerHeight))
@@ -156,5 +198,23 @@ struct WaveformCanvas: View {
             tick += step
         }
         context.stroke(ticks, with: .color(.secondary), lineWidth: 1)
+    }
+
+    /// A blue line for each marker, with a small flag in the ruler.
+    private func drawMarkers(in context: inout GraphicsContext, height: CGFloat, visibleStart: Double, visibleEnd: Double) {
+        guard !markerTimes.isEmpty else { return }
+        var lines = Path()
+        var flags = Path()
+        for time in markerTimes where time >= visibleStart && time <= visibleEnd {
+            let x = xPosition(for: time, visibleStart: visibleStart)
+            guard x.isFinite else { continue }
+            lines.addRect(CGRect(x: x - 1, y: 0, width: 2, height: height))
+            flags.move(to: CGPoint(x: x - 5, y: 0))
+            flags.addLine(to: CGPoint(x: x + 5, y: 0))
+            flags.addLine(to: CGPoint(x: x, y: 7))
+            flags.closeSubpath()
+        }
+        context.fill(lines, with: .color(.blue))
+        context.fill(flags, with: .color(.blue))
     }
 }

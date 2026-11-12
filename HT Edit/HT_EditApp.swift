@@ -21,6 +21,10 @@ struct HT_EditApp: App {
             RootView()
         }
         .defaultSize(width: 1280, height: 820)
+        .commands {
+            // View ▸ Show Sidebar (⌃⌘S) for the clip sidebar, hidden at launch.
+            SidebarCommands()
+        }
     }
 }
 

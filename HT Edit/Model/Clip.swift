@@ -16,6 +16,8 @@ struct Clip: Identifiable {
     var duration: CMTime = .zero
     /// Display size with the track's rotation applied; `.zero` for audio-only files.
     var presentationSize: CGSize = .zero
+    /// `false` for a file without an audio track: there's nothing to transcribe.
+    var hasAudio = true
     var isAnalyzing = true
     var thumbnail: CGImage?
 

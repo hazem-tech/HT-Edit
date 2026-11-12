@@ -44,6 +44,12 @@ struct SilenceSettingsPanel: View {
                 ) { Self.milliseconds($0) }
                 .accessibilityIdentifier("paddingEndSlider")
             }
+
+            Section("Speech") {
+                Toggle("Cut parts without speech", isOn: $model.cutsNonSpeech)
+                    .help("Once a clip's transcript is complete, playback skips everything that isn't speech: pauses between words, and noises.")
+                    .accessibilityIdentifier("cutNonSpeechToggle")
+            }
         }
         .formStyle(.grouped)
         .monospacedDigit()

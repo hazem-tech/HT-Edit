@@ -23,10 +23,12 @@ enum PlaybackStatus: Equatable {
 /// 2. In parallel: the seamless composition is (re)built for the player, and
 ///    audio levels stream in (the waveform refreshes at most 20×/s). Neither
 ///    waits for the other.
+/// 3. Once placed, the clip is transcribed automatically. When its transcript
+///    and word timing are complete, everything that isn't speech is cut too.
 ///
 /// Settings changes only re-run the pure silence detector over the stored
-/// levels, so highlights update instantly. Playback always skips silences,
-/// and the words deleted in the transcript.
+/// levels, so highlights update instantly. Playback skips silences, the words
+/// deleted in the transcript, and what isn't speech (`removedRanges`).
 @Observable
 final class EditorViewModel {
 
@@ -42,16 +44,46 @@ final class EditorViewModel {
     private(set) var deletedWordIDs: Set<String> = []
     /// Where the deleted words are cut, per clip in clip time.
     private(set) var wordCuts: [WordCut] = []
-    /// What playback skips: silences and cut words, on the timeline, sorted and non-overlapping.
+    /// Cut words on the timeline.
+    private(set) var cutRanges: [CMTimeRange] = []
+    /// Stretches without speech on the timeline (clips with a complete transcript only).
+    private(set) var nonSpeechRanges: [CMTimeRange] = []
+    /// Everything left out of the edit, with why: sorted and non-overlapping.
+    private(set) var removedRanges: [RemovedRange] = []
+    /// What playback skips: `removedRanges` without the reasons.
     private(set) var skipRanges: [CMTimeRange] = []
+    /// Transcript lines at their timeline positions.
+    private(set) var timelineTranscript: [TimelineSegment] = []
+    /// Every word of `timelineTranscript`, in order.
+    private(set) var timelineWords: [TimelineWord] = []
+    /// Words selected in the transcript (`TimelineWord.id`).
+    private(set) var selectedWordIDs: Set<String> = []
+    /// Whether the timeline pages along with the playhead. Scrolling the
+    /// timeline during playback turns it off until playback starts again.
+    private(set) var followsPlayhead = true
+    /// The removed stretch being previewed, if any: playback doesn't skip it.
+    private(set) var previewRange: CMTimeRange?
+    /// Markers, in the order they were added.
+    private(set) var markers: [Marker] = []
+    /// Marker positions on the timeline, in seconds, sorted.
+    private(set) var markerTimes: [Double] = []
     private(set) var playbackStatus: PlaybackStatus = .idle
     /// Bumped whenever stored levels change, so views depending on them refresh.
     private(set) var levelsRevision = 0
     var errorMessage: String?
+    /// The clip list has keyboard focus: Delete removes clips there, not words.
+    @ObservationIgnored var isClipListFocused = false
 
     var settings = SilenceSettings.default {
         didSet {
             if settings != oldValue { recomputeSilences() }
+        }
+    }
+
+    /// Cut what isn't speech once a clip's transcript is complete.
+    var cutsNonSpeech = true {
+        didSet {
+            if cutsNonSpeech != oldValue { recomputeSkips() }
         }
     }
 
@@ -65,9 +97,6 @@ final class EditorViewModel {
 
     /// Clips on the timeline, in order (clips whose duration is still loading aren't placed yet).
     var placedClips: [Clip] { clips.filter(\.isPlaced) }
-
-    /// Transcript lines at their timeline positions.
-    var timelineTranscript: [TimelineSegment] { transcription.timelineSegments(for: placedClips) }
 
     var timelineDuration: CMTime {
         placedClips.reduce(.zero) { $0 + $1.duration }
@@ -95,19 +124,6 @@ final class EditorViewModel {
 
     var totalSilenceDuration: CMTime { SilenceDetector.totalDuration(of: silences) }
 
-    /// Cut words on the timeline.
-    var cutRanges: [CMTimeRange] {
-        let placed = placedClips
-        let starts = Dictionary(uniqueKeysWithValues: zip(placed.map(\.id), ClipTimeline.starts(for: placed.map(\.duration))))
-        return wordCuts.compactMap { cut in
-            guard let start = starts[cut.clipID] else { return nil }
-            return CMTimeRange(
-                start: start + CMTime(seconds: cut.start, preferredTimescale: 48_000),
-                end: start + CMTime(seconds: cut.end, preferredTimescale: 48_000)
-            )
-        }
-    }
-
     // MARK: Private state
 
     private let analyzer: AudioLevelAnalyzer
@@ -119,6 +135,11 @@ final class EditorViewModel {
     @ObservationIgnored private var compositionGeneration = 0
     @ObservationIgnored private var periodicObserver: Any?
     @ObservationIgnored private var boundaryObserver: Any?
+    @ObservationIgnored private var previewObserver: Any?
+    /// The preview has reached its start and is playing towards its end.
+    @ObservationIgnored private var isPreviewPlaying = false
+    /// Index in `timelineWords` of the last plain or Command click, for Shift-click.
+    @ObservationIgnored private var selectionAnchor: Int?
     @ObservationIgnored private var securityScopedURLs: [URL] = []
     @ObservationIgnored private var isSkipping = false
     @ObservationIgnored private var lastLevelsPublish = ContinuousClock.now
@@ -135,6 +156,7 @@ final class EditorViewModel {
         self.transcription = transcription
         self.player = AVPlayer()
         configurePlayer()
+        connectTranscription()
     }
 
     /// Creates a model with pre-analyzed clips (used by tests and previews).
@@ -156,7 +178,8 @@ final class EditorViewModel {
         }
         self.settings = settings
         configurePlayer()
-        recomputeSilences()
+        connectTranscription()
+        layoutDidChange()
     }
 
     // MARK: Clips
@@ -176,14 +199,16 @@ final class EditorViewModel {
 
     /// Reorders clips (drag in the sidebar). Timeline, silences and playback follow.
     func moveClips(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        endPreview()
         clips = ClipTimeline.moving(clips, fromOffsets: offsets, toOffset: destination)
-        recomputeSilences()
+        layoutDidChange()
         rebuildPlayerItem()
     }
 
     /// Removes clips from the timeline (sidebar right-click ▸ Delete, or the Delete key).
     func removeClips(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
+        endPreview()
         for clip in clips where ids.contains(clip.id) {
             clipTasks.removeValue(forKey: clip.id)?.cancel()
             levelsStore.remove(clip.id)
@@ -192,11 +217,14 @@ final class EditorViewModel {
             }
         }
         clips.removeAll { ids.contains($0.id) }
-        transcription.remove(ids)
+        markers.removeAll { ids.contains($0.clipID) }
         let removedPrefixes = ids.map(\.uuidString)
         deletedWordIDs = deletedWordIDs.filter { id in !removedPrefixes.contains { id.hasPrefix($0) } }
+        selectedWordIDs = selectedWordIDs.filter { id in !removedPrefixes.contains { id.hasPrefix($0) } }
+        selectionAnchor = nil
+        transcription.remove(ids)
         levelsRevision += 1
-        recomputeSilences()
+        layoutDidChange()
 
         if clips.isEmpty {
             transcription.cancel()
@@ -227,17 +255,24 @@ final class EditorViewModel {
                     let (naturalSize, transform) = try await video.load(.naturalSize, .preferredTransform)
                     size = CompositionBuilder.presentationSize(naturalSize: naturalSize, transform: transform)
                 }
+                let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+                let hasAudio = !audioTracks.isEmpty
                 try Task.checkCancellation()
                 updateClip(clipID) {
                     $0.duration = duration
                     $0.presentationSize = size
+                    $0.hasAudio = hasAudio
                 }
                 Log.importing.notice("\(name, privacy: .public): \(duration.seconds) s, \(Int(size.width))×\(Int(size.height))")
 
-                // 2. Playback and thumbnail are prepared in their own tasks; the
-                //    waveform never waits for them.
+                // 2. Playback, thumbnail and transcript are prepared in their own
+                //    tasks; the waveform never waits for them.
+                layoutDidChange()
                 rebuildPlayerItem()
                 loadThumbnail(clipID: clipID, asset: asset)
+                if let clip = clips.first(where: { $0.id == clipID }) {
+                    transcription.enqueue([clip])
+                }
 
                 // 3. Audio levels, streamed in as segments finish.
                 for try await chunk in analyzer.levels(for: url) {
@@ -276,12 +311,43 @@ final class EditorViewModel {
 
     // MARK: Transcript editing
 
-    /// Transcribes every clip on the timeline again. Deleted words are restored:
-    /// the new transcript has new words.
+    /// Transcribes every clip on the timeline again (a different model was
+    /// picked). Deleted words are restored: the new transcript has new words.
     func transcribeAll() {
         deletedWordIDs = []
+        selectedWordIDs = []
+        selectionAnchor = nil
         transcription.transcribe(placedClips)
         recomputeSkips()
+    }
+
+    /// Transcribes what's missing after a failed or cancelled run.
+    func retryTranscription() {
+        transcription.retry(placedClips)
+    }
+
+    /// Selects the word at `index` in `timelineWords`. A plain click selects
+    /// just that word and jumps there; `extending` (Shift) selects everything
+    /// from the last click; `toggling` (Command) adds or removes one word.
+    func selectWord(at index: Int, extending: Bool = false, toggling: Bool = false) {
+        let words = timelineWords
+        guard words.indices.contains(index) else { return }
+        let id = words[index].id
+        if extending, let anchor = selectionAnchor, words.indices.contains(anchor) {
+            selectedWordIDs = Set(words[min(anchor, index)...max(anchor, index)].map(\.id))
+        } else if toggling {
+            if selectedWordIDs.contains(id) { selectedWordIDs.remove(id) } else { selectedWordIDs.insert(id) }
+            selectionAnchor = index
+        } else {
+            selectedWordIDs = [id]
+            selectionAnchor = index
+            seek(toSeconds: words[index].start)
+        }
+    }
+
+    /// Cuts the selected words, or restores them if they're all cut already (⌫).
+    func toggleSelectedWords() {
+        toggleDeletion(of: selectedWordIDs)
     }
 
     /// Deletes `ids` from the edit (playback skips them), or restores them if
@@ -305,18 +371,66 @@ final class EditorViewModel {
 
     func togglePlayback() {
         guard hasMedia else { return }
+        endPreview()
         if isPlaying {
             player.pause()
         } else {
             if timelineDuration > .zero, player.currentTime() >= timelineDuration {
                 seek(to: .zero)
             }
+            if !followsPlayhead { followsPlayhead = true }
             player.play()
         }
     }
 
+    /// The user scrolled the timeline: stop paging it along with the playhead
+    /// until playback starts again.
+    func userScrolledTimeline() {
+        if isPlaying, followsPlayhead { followsPlayhead = false }
+    }
+
+    /// Plays `range` (a removed stretch) without skipping it, then pauses at its end.
+    func preview(_ range: CMTimeRange) {
+        guard hasMedia, range.isValid, range.duration > .zero else { return }
+        endPreview()
+        player.pause()
+        previewRange = range
+        if !followsPlayhead { followsPlayhead = true }
+        currentTime = range.start
+        Task {
+            _ = await player.seek(to: range.start, toleranceBefore: .zero, toleranceAfter: .zero)
+            guard previewRange == range else { return }
+            isPreviewPlaying = true
+            previewObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: range.end)], queue: .main) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.finishPreview()
+                }
+            }
+            player.play()
+        }
+    }
+
+    /// Adds a marker at the playhead (the M key). It belongs to the clip there.
+    func addMarker() {
+        let placed = placedClips
+        guard !placed.isEmpty else { return }
+        let now = player.currentItem == nil ? currentTime : player.currentTime()
+        let time = CMTimeMaximum(.zero, now.isNumeric ? now : currentTime)
+        let durations = placed.map(\.duration)
+        let index = ClipTimeline.clipIndex(at: time, durations: durations) ?? placed.count - 1
+        let clip = placed[index]
+        let clipStart = ClipTimeline.starts(for: durations)[index]
+        let clipTime = min(max(0, (time - clipStart).seconds), clip.duration.seconds)
+        guard clipTime.isFinite else { return }
+        let frame = 1.0 / 60
+        guard !markers.contains(where: { $0.clipID == clip.id && abs($0.clipTime - clipTime) < frame }) else { return }
+        markers.append(Marker(clipID: clip.id, clipTime: clipTime))
+        recomputeMarkerTimes()
+    }
+
     func seek(to time: CMTime) {
         guard hasMedia else { return }
+        endPreview()
         let upper = timelineDuration
         var target = CMTimeMaximum(.zero, time)
         if upper > .zero { target = CMTimeMinimum(target, upper) }
@@ -398,14 +512,69 @@ final class EditorViewModel {
         recomputeSkips()
     }
 
+    /// Clips were placed, moved or removed: everything positioned on the timeline follows.
+    private func layoutDidChange() {
+        rebuildTranscript()
+        recomputeMarkerTimes()
+        recomputeSilences()
+    }
+
+    /// Hooks the transcription up: new transcript text refreshes the cuts, and
+    /// a different model transcribes everything again.
+    private func connectTranscription() {
+        transcription.onTranscriptsChange = { [weak self] in
+            self?.transcriptDidChange()
+        }
+        transcription.onModelChange = { [weak self] in
+            guard let self, self.hasMedia else { return }
+            self.transcribeAll()
+        }
+    }
+
+    private func transcriptDidChange() {
+        rebuildTranscript()
+        recomputeSkips()
+    }
+
+    private func rebuildTranscript() {
+        let segments = transcription.timelineSegments(for: placedClips)
+        timelineTranscript = segments
+        timelineWords = segments.flatMap(\.words)
+        if !selectedWordIDs.isEmpty {
+            let current = Set(timelineWords.map(\.id))
+            if !selectedWordIDs.isSubset(of: current) { selectedWordIDs.formIntersection(current) }
+        }
+    }
+
+    private func recomputeMarkerTimes() {
+        let placed = placedClips
+        let starts = Dictionary(uniqueKeysWithValues: zip(placed.map(\.id), ClipTimeline.starts(for: placed.map(\.duration))))
+        markerTimes = markers.compactMap { marker in
+            starts[marker.clipID].map { $0.seconds + marker.clipTime }
+        }.sorted()
+    }
+
     /// Re-plans the word cuts (they snap to the quietest point of each pause,
-    /// so they follow the levels) and what playback skips.
+    /// so they follow the levels), the stretches without speech, and what
+    /// playback skips.
     private func recomputeSkips() {
+        let placed = placedClips
+        let starts = Dictionary(uniqueKeysWithValues: zip(placed.map(\.id), ClipTimeline.starts(for: placed.map(\.duration))))
+        let wordsByClip = Dictionary(grouping: timelineWords, by: \.clipID)
+        func onTimeline(_ clipID: UUID, _ start: Double, _ end: Double) -> CMTimeRange? {
+            guard let clipStart = starts[clipID], start.isFinite, end.isFinite, end > start else { return nil }
+            return CMTimeRange(
+                start: clipStart + CMTime(seconds: start, preferredTimescale: 48_000),
+                end: clipStart + CMTime(seconds: end, preferredTimescale: 48_000)
+            )
+        }
+
+        var tagged: [(range: CMTimeRange, reason: RemovalReason)] = silences.map { (range: $0, reason: .silence) }
+
         if deletedWordIDs.isEmpty {
             wordCuts = []
         } else {
-            let wordsByClip = Dictionary(grouping: timelineTranscript.flatMap(\.words), by: \.clipID)
-            wordCuts = placedClips.flatMap { clip in
+            wordCuts = placed.flatMap { clip in
                 WordCutPlanner.cuts(
                     clipID: clip.id,
                     words: wordsByClip[clip.id] ?? [],
@@ -415,7 +584,28 @@ final class EditorViewModel {
                 )
             }
         }
-        skipRanges = WordCutPlanner.union(silences, cutRanges)
+        var cuts: [CMTimeRange] = []
+        for cut in wordCuts {
+            guard let range = onTimeline(cut.clipID, cut.start, cut.end) else { continue }
+            cuts.append(range)
+            tagged.append((range: range, reason: .cutWords(cut.text)))
+        }
+        cutRanges = cuts
+
+        var noSpeech: [CMTimeRange] = []
+        if cutsNonSpeech {
+            let complete = transcription.completedClipIDs
+            for clip in placed where complete.contains(clip.id) {
+                for gap in NonSpeechPlanner.ranges(words: wordsByClip[clip.id] ?? [], clipDuration: clip.duration.seconds) {
+                    if let range = onTimeline(clip.id, gap.lowerBound, gap.upperBound) { noSpeech.append(range) }
+                }
+            }
+        }
+        nonSpeechRanges = noSpeech
+        tagged += noSpeech.map { (range: $0, reason: .noSpeech) }
+
+        removedRanges = RemovalPlanner.merge(tagged)
+        skipRanges = removedRanges.map(\.range)
         installBoundaryObserver()
     }
 
@@ -458,6 +648,9 @@ final class EditorViewModel {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.currentTime = time
+                if self.isPreviewPlaying, let preview = self.previewRange, time >= preview.end {
+                    self.finishPreview()
+                }
                 self.skipIfInsideSilence()
             }
         }
@@ -483,12 +676,29 @@ final class EditorViewModel {
     private func skipIfInsideSilence() {
         guard !isSkipping, player.rate != 0 else { return }
         let probe = player.currentTime() + Self.skipLookahead
+        if let preview = previewRange, probe >= preview.start, probe < preview.end + Self.skipLookahead { return }
         guard let target = PlaybackSkipper.skipTarget(for: probe, in: skipRanges) else { return }
         isSkipping = true
         Task {
             _ = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
             isSkipping = false
         }
+    }
+
+    /// The preview reached its end: pause there.
+    private func finishPreview() {
+        guard previewRange != nil, isPreviewPlaying else { return }
+        player.pause()
+        endPreview()
+    }
+
+    private func endPreview() {
+        if let token = previewObserver {
+            player.removeTimeObserver(token)
+            previewObserver = nil
+        }
+        isPreviewPlaying = false
+        if previewRange != nil { previewRange = nil }
     }
 }
 

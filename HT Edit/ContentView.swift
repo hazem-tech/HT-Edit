@@ -12,7 +12,8 @@ struct ContentView: View {
     @State private var model: EditorViewModel
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    /// The clip sidebar starts hidden; the sidebar button or ⌃⌘S shows it.
+    @State private var columnVisibility = NavigationSplitViewVisibility.detailOnly
 
     init(model: EditorViewModel = EditorViewModel()) {
         _model = State(initialValue: model)
@@ -60,6 +61,8 @@ struct ContentView: View {
         .dropDestination(for: URL.self) { urls, _ in
             model.add(urls: urls.filter(Self.isMediaFile))
         }
+        // Space, M and ⌫ work whatever has focus, except while typing.
+        .background { EditorKeyMonitor(model: model) }
         #if DEBUG
         .task { await UITestSupport.importFixtureIfRequested(into: model) }
         #endif
@@ -133,9 +136,7 @@ struct ContentView: View {
             .labelStyle(.iconOnly)
             .accessibilityIdentifier("playPauseButton")
 
-            Text("\(TimeFormatting.string(model.currentTime, fractionDigits: 2)) / \(TimeFormatting.string(model.timelineDuration, fractionDigits: 2))")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+            TransportTimeLabel(model: model)
 
             Spacer()
         }
@@ -154,7 +155,6 @@ struct ContentView: View {
             Button(model.isPlaying ? "Pause" : "Play", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
                 model.togglePlayback()
             }
-            .keyboardShortcut(.space, modifiers: [])
             .disabled(!model.hasMedia)
             .help("Play / Pause (Space)")
 
@@ -185,6 +185,19 @@ struct ContentView: View {
     private static func isMediaFile(_ url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .audiovisualContent)
+    }
+}
+
+/// The playhead time. Its own view, so 30 Hz time updates redraw only this
+/// label, never the editor around it.
+private struct TransportTimeLabel: View {
+    let model: EditorViewModel
+
+    var body: some View {
+        Text("\(TimeFormatting.string(model.currentTime, fractionDigits: 2)) / \(TimeFormatting.string(model.timelineDuration, fractionDigits: 2))")
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("transportTime")
     }
 }
 

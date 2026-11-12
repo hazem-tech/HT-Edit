@@ -8,6 +8,28 @@ import Foundation
 import Testing
 @testable import HT_Edit
 
+// MARK: Transcription model
+
+/// The model every test transcribes with. Change it here, and only here.
+let testModelID = "gemini-3.8-flash-low"
+
+/// `testModelID` as the catalog lists it.
+var testModel: TranscriptionModel {
+    TranscriptionModel.catalog.first { $0.id == testModelID } ?? TranscriptionModel(id: testModelID, displayName: testModelID)
+}
+
+/// Another catalog model, for tests that need two.
+var otherTestModel: TranscriptionModel {
+    TranscriptionModel.catalog.first { $0.id != testModelID } ?? testModel
+}
+
+/// `testModel` and `otherTestModel`, cheapest first (catalog order).
+var testModelPair: [TranscriptionModel] {
+    TranscriptionModel.catalog.filter { $0.id == testModelID || $0.id == otherTestModel.id }
+}
+
+// MARK: Levels
+
 /// Builds `AudioLevels` from per-window dB values: 1 kHz, 10 frames per window (10 ms).
 func makeLevels(_ decibels: [Float], complete: Bool = true, frameCount: Int? = nil) -> AudioLevels {
     var levels = AudioLevels.empty

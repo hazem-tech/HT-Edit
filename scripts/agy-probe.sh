@@ -9,7 +9,7 @@
 # "HT Edit/Transcription/AgyEngine.swift"); keep the two in sync.
 
 set -u
-model="${1:-gemini-3.1-flash-lite}"
+model="${1:-gemini-3.8-flash-low}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 

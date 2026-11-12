@@ -33,6 +33,10 @@ struct ClipListView: View {
         .onChange(of: selection) { _, newValue in
             if !newValue.isEmpty { isFocused = true }
         }
+        // Tells the editor's key handling that Delete belongs to the list.
+        .onChange(of: isFocused, initial: true) { _, focused in
+            model.isClipListFocused = focused
+        }
         .contextMenu(forSelectionType: Clip.ID.self) { ids in
             if !ids.isEmpty {
                 Button(ids.count == 1 ? "Delete Clip" : "Delete \(ids.count) Clips", systemImage: "trash", role: .destructive) {

@@ -24,7 +24,9 @@ struct EditorWindowTests {
 
         var analyzer = AudioLevelAnalyzer(cache: LevelsCache(directory: directory.appending(path: "cache")))
         analyzer.stallTimeout = .seconds(5)
-        let model = EditorViewModel(analyzer: analyzer)
+        // Imports transcribe automatically: never run the real `agy` from tests.
+        let transcription = TranscriptionController(engine: ScriptedEngine(status: .notInstalled), cache: nil, defaults: nil)
+        let model = EditorViewModel(analyzer: analyzer, transcription: transcription)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
@@ -70,8 +72,19 @@ struct EditorWindowTests {
         model.seek(toSeconds: 0.8)
         model.togglePlayback()
         let skipped = await waitUntil(timeout: .seconds(5)) { model.currentTime.seconds >= 2 }
+        // Scrolling the timeline while playing stops it following the playhead...
+        let wasPlaying = model.isPlaying
+        model.userScrolledTimeline()
+        let stoppedFollowing = !model.followsPlayhead
         model.togglePlayback()
         #expect(skipped, "Playback didn't pass the silence (at \(model.currentTime.seconds) s)")
+        if wasPlaying {
+            #expect(stoppedFollowing)
+        }
+        // ...until playback starts again.
+        model.togglePlayback()
+        #expect(model.followsPlayhead)
+        model.togglePlayback()
     }
 
     private static func find<T: NSView>(_ type: T.Type, in view: NSView?) -> T? {
