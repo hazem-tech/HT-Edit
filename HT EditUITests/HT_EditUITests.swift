@@ -159,6 +159,39 @@ final class HT_EditUITests: XCTestCase {
         add(XCTAttachment(screenshot: app.screenshot()))
     }
 
+    // MARK: Zoom
+
+    /// Dragging the zoom slider fast with the playhead midway through the
+    /// timeline used to crash (at the first frame it never did).
+    @MainActor
+    func testZoomSliderDraggedFastWithThePlayheadMidway() throws {
+        let app = launchWithFixture("h264Landscape", "h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 30), "Timeline didn't appear", app)
+        let analyzing = app.staticTexts["Analyzing audio…"]
+        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: analyzing)], timeout: 30)
+
+        // Put the playhead in the middle of the timeline.
+        app.timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).click()
+
+        let slider = app.sliders["zoomSlider"]
+        expect(slider.waitForExistence(timeout: 5), "Zoom slider not found", app)
+        let left = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5))
+        let right = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5))
+        for round in 0..<8 {
+            if round.isMultiple(of: 2) {
+                left.click(forDuration: 0.05, thenDragTo: right)
+            } else {
+                right.click(forDuration: 0.05, thenDragTo: left)
+            }
+        }
+        for position in [0.9, 0.1, 1, 0, 0.6, 0.3, 0.95, 0.05, 0.75, 0.25, 1, 0.5, 0, 0.8, 0.2] {
+            slider.adjust(toNormalizedSliderPosition: CGFloat(position))
+        }
+
+        expect(app.state == .runningForeground, "The app quit while zooming", app)
+        expect(app.timeline.exists, "Timeline is gone after zooming", app)
+    }
+
     // MARK: Keyboard
 
     /// Space plays even while the clip list has keyboard focus (a list would
