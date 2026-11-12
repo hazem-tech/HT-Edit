@@ -15,6 +15,8 @@ nonisolated struct WordCut: Sendable, Equatable {
     /// The kept and deleted words run together (almost no pause between
     /// them), so the cut can't fall in a pause.
     var isTight: Bool
+    /// The deleted words, as shown in the transcript.
+    var text: String = ""
 }
 
 /// Turns deleted words into cuts that sound clean.
@@ -83,7 +85,8 @@ nonisolated enum WordCutPlanner {
         guard end > start else { return nil }
         let isTight = (before.map { first.clipStart - $0.clipEnd < tightGap } ?? false)
             || (after.map { $0.clipStart - last.clipEnd < tightGap } ?? false)
-        return WordCut(clipID: clipID, start: start, end: end, isTight: isTight)
+        let text = words[run].map(\.text).joined(separator: " ")
+        return WordCut(clipID: clipID, start: start, end: end, isTight: isTight, text: text)
     }
 
     /// The quietest point in `range` (seconds): the middle of the quietest

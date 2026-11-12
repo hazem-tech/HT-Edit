@@ -21,7 +21,9 @@ struct ImportPipelineTests {
     private func makeModel(cacheDirectory: URL) -> EditorViewModel {
         var analyzer = AudioLevelAnalyzer(cache: LevelsCache(directory: cacheDirectory))
         analyzer.stallTimeout = .seconds(5)
-        return EditorViewModel(analyzer: analyzer)
+        // Imports transcribe automatically: never run the real `agy` from tests.
+        let transcription = TranscriptionController(engine: ScriptedEngine(status: .notInstalled), cache: nil, defaults: nil)
+        return EditorViewModel(analyzer: analyzer, transcription: transcription)
     }
 
     private func waitForImport(_ model: EditorViewModel, expectingVideo: Bool) async throws {

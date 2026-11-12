@@ -3,6 +3,7 @@
 //  HT Edit
 //
 
+import CoreMedia
 import SwiftUI
 
 /// Shown while `WarmUp` primes the media pipeline at launch.
@@ -22,7 +23,7 @@ struct SplashView: View {
             // Renders the waveform canvas once off-screen so its Metal pipeline is ready.
             WaveformCanvas(
                 lanes: [ClipLane(id: UUID(), start: 0, duration: 1, levels: Self.sampleLevels)],
-                silences: [],
+                removed: [RemovedRange(range: CMTimeRange(start: .zero, end: CMTime(value: 1, timescale: 2)), reason: .silence)],
                 thresholdDB: SilenceSettings.default.thresholdDB,
                 offset: 0,
                 pixelsPerSecond: 200

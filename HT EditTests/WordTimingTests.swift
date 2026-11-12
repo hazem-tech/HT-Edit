@@ -337,6 +337,7 @@ struct WordDeletionTests {
         let controller = TranscriptionController(engine: engine, cache: nil, defaults: nil, chunkLength: 3)
         let clip = Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))
         let model = EditorViewModel(analyzedClips: [(clip, makeLevels(loud(3)))], transcription: controller)
+        model.cutsNonSpeech = false
 
         model.transcribeAll()
         #expect(await waitUntil { controller.phase == .finished })
@@ -356,5 +357,82 @@ struct WordDeletionTests {
         model.transcribeAll()
         #expect(model.deletedWordIDs.isEmpty, "a new transcript starts with nothing deleted")
         #expect(await waitUntil { controller.phase == .finished })
+    }
+
+    @Test func deleteKeyTogglesTheSelectedWords() async throws {
+        let directory = makeTemporaryDirectory("toggle-words")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let engine = ScriptedEngine { _, _ in [TranscriptSegment(start: 0.5, end: 2.5, text: "one two three four")] }
+        let controller = TranscriptionController(engine: engine, cache: nil, defaults: nil, chunkLength: 3)
+        let clip = Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))
+        let model = EditorViewModel(analyzedClips: [(clip, makeLevels(loud(3)))], transcription: controller)
+        model.cutsNonSpeech = false
+        model.transcribeAll()
+        #expect(await waitUntil { controller.phase == .finished })
+        let words = model.timelineWords
+
+        model.selectWord(at: 1)
+        model.selectWord(at: 2, extending: true)
+        #expect(model.selectedWordIDs == [words[1].id, words[2].id])
+        model.toggleSelectedWords()
+        #expect(model.deletedWordIDs == [words[1].id, words[2].id])
+        #expect(model.wordCuts.count == 1, "neighbors make one cut")
+        #expect(model.removedRanges.first?.reason == .cutWords("two three"))
+
+        model.toggleSelectedWords()
+        #expect(model.deletedWordIDs.isEmpty, "pressing it again restores them")
+
+        model.selectWord(at: 0)
+        model.selectWord(at: 3, toggling: true)
+        #expect(model.selectedWordIDs == [words[0].id, words[3].id])
+        model.selectWord(at: 3, toggling: true)
+        #expect(model.selectedWordIDs == [words[0].id])
+    }
+
+    @Test func whatIsntSpeechIsCutOnceTheTranscriptIsComplete() async throws {
+        let directory = makeTemporaryDirectory("no-speech")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 3)
+        let engine = ScriptedEngine(delay: .milliseconds(300)) { _, _ in [TranscriptSegment(start: 0.5, end: 2.5, text: "one two three four")] }
+        let controller = TranscriptionController(engine: engine, cache: nil, defaults: nil, chunkLength: 3)
+        let clip = Clip(url: audio, duration: CMTime(seconds: 3, preferredTimescale: 600))
+        let model = EditorViewModel(analyzedClips: [(clip, makeLevels(loud(3)))], transcription: controller)
+
+        model.transcribeAll()
+        #expect(model.nonSpeechRanges.isEmpty, "nothing is cut while transcribing")
+        #expect(await waitUntil { controller.phase == .finished })
+        #expect(controller.completedClipIDs == [clip.id])
+
+        // Speech 0.5–2.5 s: before and after it is cut, keeping 0.1 s next to the words.
+        #expect(matches(model.nonSpeechRanges, [(0, 0.4), (2.6, 3)], tolerance: 0.001))
+        #expect(model.removedRanges.map(\.reason) == [.noSpeech, .noSpeech])
+        #expect(model.skipRanges == model.removedRanges.map(\.range))
+
+        model.cutsNonSpeech = false
+        #expect(model.skipRanges.isEmpty)
+        model.cutsNonSpeech = true
+        #expect(model.skipRanges.count == 2)
+    }
+
+    @Test func aClipWithFailedPartsKeepsWhatIsntTranscribed() async throws {
+        let directory = makeTemporaryDirectory("no-speech-failed")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 7)
+        // The 4 s chunk (3–7) always fails.
+        let engine = ScriptedEngine { _, duration in
+            if duration > 3.5 { throw AgyError.invalidOutput("nope") }
+            return [TranscriptSegment(start: 1, end: 2, text: "ok")]
+        }
+        let controller = TranscriptionController(engine: engine, cache: nil, defaults: nil, chunkLength: 3)
+        let clip = Clip(url: audio, duration: CMTime(seconds: 7, preferredTimescale: 600))
+        let model = EditorViewModel(analyzedClips: [(clip, makeLevels(loud(7)))], transcription: controller)
+
+        model.transcribeAll()
+        #expect(await waitUntil { controller.phase == .finished })
+        #expect(controller.hasFailedChunks)
+        #expect(controller.completedClipIDs.isEmpty)
+        #expect(model.nonSpeechRanges.isEmpty, "the untranscribed part may well be speech")
+        #expect(controller.needsRetry(for: model.placedClips))
     }
 }

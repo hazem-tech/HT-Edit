@@ -29,7 +29,7 @@ final class ReadmeScreenshots: XCTestCase {
     }
 
     /// Two landscape clips on one timeline: the clip sidebar, the clip-boundary
-    /// line, highlighted silences and the live settings.
+    /// line, the removed (grayed-out) parts and the live settings.
     @MainActor
     func testLandscapeTimeline() throws {
         let app = launchAndWaitForAnalysis(fixtures: "h264Landscape,h264Landscape", clips: 2)
@@ -48,11 +48,14 @@ final class ReadmeScreenshots: XCTestCase {
     @MainActor
     private func launchAndWaitForAnalysis(fixtures: String, clips: Int) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITestFixture", fixtures]
+        // The fake transcriber stands in for Antigravity, as in the other UI tests.
+        app.launchArguments = ["-UITestFixture", fixtures, "-UITestFakeTranscription", "1"]
         app.launch()
 
-        let rows = app.descendants(matching: .any).matching(identifier: "clipRow")
-        XCTAssertTrue(rows.element(boundBy: clips - 1).waitForExistence(timeout: 30), "Clips didn't appear")
+        XCTAssertTrue(app.timeline.waitForExistence(timeout: 30), "Timeline didn't appear")
+        // The clip sidebar starts hidden; show it for the screenshots.
+        app.showSidebar()
+        XCTAssertTrue(app.clipRows.element(boundBy: clips - 1).waitForExistence(timeout: 30), "Clips didn't appear")
 
         let analyzing = app.staticTexts["Analyzing audio…"]
         let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: analyzing)

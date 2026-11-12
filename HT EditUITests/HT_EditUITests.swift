@@ -50,11 +50,13 @@ final class HT_EditUITests: XCTestCase {
 
     // MARK: Imported media
 
-    /// Imports a generated video (green frames, tone/silence/tone) via the debug hook.
+    /// Imports a generated video (green frames, tone/silence/tone) via the debug
+    /// hook. Imports transcribe automatically, so the built-in fake stands in
+    /// for Antigravity: UI tests never run the real `agy`.
     @MainActor
-    private func launchWithFixture(_ kinds: String..., extraArguments: [String] = []) -> XCUIApplication {
+    private func launchWithFixture(_ kinds: String...) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITestFixture", kinds.joined(separator: ",")] + extraArguments
+        app.launchArguments = ["-UITestFixture", kinds.joined(separator: ","), "-UITestFakeTranscription", "1"]
         app.launch()
         return app
     }
@@ -63,8 +65,8 @@ final class HT_EditUITests: XCTestCase {
     func testImportedVideoShowsFramesAndFinishesAnalyzing() throws {
         let app = launchWithFixture("h264Landscape")
 
-        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
+        expect(!app.clipRows.firstMatch.exists, "The clip sidebar should start hidden", app)
 
         // "Analyzing audio…" must go away.
         let analyzing = app.staticTexts["Analyzing audio…"]
@@ -89,8 +91,7 @@ final class HT_EditUITests: XCTestCase {
     @MainActor
     func testToolbarAddButtonOpensFilePickerWithMediaLoaded() throws {
         let app = launchWithFixture("h264Landscape")
-        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
 
         let addButton = app.buttons["addButton"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
@@ -101,7 +102,9 @@ final class HT_EditUITests: XCTestCase {
     @MainActor
     func testRightClickDeleteRemovesClip() throws {
         let app = launchWithFixture("h264Landscape", "h264Landscape")
-        let rows = app.descendants(matching: .any).matching(identifier: "clipRow")
+        expect(app.timeline.waitForExistence(timeout: 30), "Timeline didn't appear", app)
+        app.showSidebar()
+        let rows = app.clipRows
         expect(rows.element(boundBy: 1).waitForExistence(timeout: 30), "Both clips should appear", app)
         XCTAssertEqual(rows.count, 2)
 
@@ -117,8 +120,10 @@ final class HT_EditUITests: XCTestCase {
     @MainActor
     func testDeleteKeyRemovesSelectedClip() throws {
         let app = launchWithFixture("h264Landscape")
-        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
+        app.showSidebar()
+        let row = app.clipRows.firstMatch
+        expect(row.waitForExistence(timeout: 10), "Clip row didn't appear", app)
 
         row.click()
         app.typeKey(.delete, modifierFlags: [])
@@ -128,34 +133,95 @@ final class HT_EditUITests: XCTestCase {
 
     // MARK: Transcript
 
-    /// With the fake transcriber (no Google sign-in needed): the Transcript tab
-    /// offers the cheapest model and an empty context, and Transcribe fills in rows.
+    /// With the fake transcriber (no Google sign-in needed): importing fills in
+    /// the transcript by itself, with the cheapest model. There's no Transcribe
+    /// button and no context field, and Retry only shows after a failure.
     @MainActor
-    func testTranscribeFillsInTimestampedRows() throws {
-        let app = launchWithFixture("h264Landscape", extraArguments: ["-UITestFakeTranscription", "1"])
-        let row = app.descendants(matching: .any).matching(identifier: "clipRow").firstMatch
-        expect(row.waitForExistence(timeout: 20), "Clip row didn't appear", app)
+    func testTranscriptionStartsAutomatically() throws {
+        let app = launchWithFixture("h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
 
         let tab = [app.radioButtons["Transcript"], app.buttons["Transcript"]].first { $0.waitForExistence(timeout: 2) }
         expect(tab != nil, "Transcript tab not found", app)
         tab?.click()
+
+        let line = app.descendants(matching: .any).matching(identifier: "transcriptRow").firstMatch
+        expect(line.waitForExistence(timeout: 20), "No transcript rows after importing", app)
 
         let picker = app.descendants(matching: .any).matching(identifier: "transcriptModelPicker").firstMatch
         expect(picker.waitForExistence(timeout: 5), "Model picker not found", app)
         let pickerValue = (picker.value as? String) ?? picker.label
         expect(pickerValue.contains("(cheapest)"), "Picker should default to the cheapest model, shows \(pickerValue)", app)
 
-        let context = app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch
-        expect(context.waitForExistence(timeout: 5), "Context field not found", app)
-        expect(((context.value as? String) ?? "").isEmpty, "Context should be empty by default", app)
-
-        let transcribe = app.buttons["transcribeButton"]
-        expect(transcribe.waitForExistence(timeout: 5) && transcribe.isEnabled, "Transcribe button not ready", app)
-        transcribe.click()
-
-        let line = app.descendants(matching: .any).matching(identifier: "transcriptRow").firstMatch
-        expect(line.waitForExistence(timeout: 20), "No transcript rows after transcribing", app)
+        expect(!app.buttons["transcribeButton"].exists, "There should be no Transcribe button", app)
+        expect(!app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch.exists, "There should be no context field", app)
+        expect(!app.buttons["transcriptRetryButton"].exists, "Retry should only show after a failure", app)
         add(XCTAttachment(screenshot: app.screenshot()))
+    }
+
+    // MARK: Zoom
+
+    /// Dragging the zoom slider fast with the playhead midway through the
+    /// timeline used to crash (at the first frame it never did).
+    @MainActor
+    func testZoomSliderDraggedFastWithThePlayheadMidway() throws {
+        let app = launchWithFixture("h264Landscape", "h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 30), "Timeline didn't appear", app)
+        let analyzing = app.staticTexts["Analyzing audio…"]
+        _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: analyzing)], timeout: 30)
+
+        // Put the playhead in the middle of the timeline.
+        app.timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).click()
+
+        let slider = app.sliders["zoomSlider"]
+        expect(slider.waitForExistence(timeout: 5), "Zoom slider not found", app)
+        let left = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5))
+        let right = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5))
+        for round in 0..<8 {
+            if round.isMultiple(of: 2) {
+                left.click(forDuration: 0.05, thenDragTo: right)
+            } else {
+                right.click(forDuration: 0.05, thenDragTo: left)
+            }
+        }
+        for position in [0.9, 0.1, 1, 0, 0.6, 0.3, 0.95, 0.05, 0.75, 0.25, 1, 0.5, 0, 0.8, 0.2] {
+            slider.adjust(toNormalizedSliderPosition: CGFloat(position))
+        }
+
+        expect(app.state == .runningForeground, "The app quit while zooming", app)
+        expect(app.timeline.exists, "Timeline is gone after zooming", app)
+    }
+
+    // MARK: Keyboard
+
+    /// Space plays even while the clip list has keyboard focus (a list would
+    /// otherwise take the space for type-to-select).
+    @MainActor
+    func testSpaceTogglesPlaybackWhenTheClipListHasFocus() throws {
+        let app = launchWithFixture("h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
+        app.showSidebar()
+        let row = app.clipRows.firstMatch
+        expect(row.waitForExistence(timeout: 10), "Clip row didn't appear", app)
+        row.click()
+
+        let time = app.staticTexts["transportTime"]
+        expect(time.waitForExistence(timeout: 5), "Time label not found", app)
+        let playPause = app.buttons["playPauseButton"]
+        let shownTime = { (time.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? time.label }
+        let before = shownTime()
+        app.typeKey(" ", modifierFlags: [])
+
+        // Playback is short (the fixture's speech is under a second), so poll
+        // for either sign that it started: the pause button, or a new time.
+        let deadline = Date().addingTimeInterval(5)
+        var started = false
+        while !started, Date() < deadline {
+            started = playPause.label == "Pause" || shownTime() != before
+            if !started { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        expect(started, "Space didn't start playback (time stayed \(before))", app)
+        expect(app.clipRows.count == 1, "Space must not touch the clip list", app)
     }
 
     // MARK: Helpers

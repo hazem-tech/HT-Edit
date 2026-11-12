@@ -111,24 +111,31 @@ struct TranscriptTimelineTests {
     @Test @MainActor func catalogDefaultsToTheCheapestModel() {
         let controller = TranscriptionController(engine: FakeTranscriptionEngine(), cache: nil, defaults: nil)
         #expect(controller.selectedModel == TranscriptionModel.catalog.first)
-        #expect(controller.context.isEmpty)
         #expect(Set(TranscriptionModel.catalog.map(\.id)).count == TranscriptionModel.catalog.count)
         #expect(TranscriptionModel.catalog.allSatisfy { $0.id.hasPrefix("gemini-") })
+        #expect(TranscriptionModel.catalog.contains(testModel), "the tests' model must be in the catalog")
+        #expect(testModelPair.count == 2)
     }
 
     @Test func availableModelsComeFromTheAgyListCheapestFirst() {
+        // Listed most expensive first: the result is still cheapest first.
         let list = """
         Available models:
           claude-sonnet-5-5        Claude Sonnet
-          gemini-3.6-flash         Gemini 3.6 Flash (default)
-          gemini-3.5-flash-lite    Gemini 3.5 Flash-Lite
+          \(testModelPair[1].id)    \(testModelPair[1].displayName) (default)
+          \(testModelPair[0].id)    \(testModelPair[0].displayName)
         """
-        // Claude can't hear audio, and "gemini-3.5-flash" only appears as part of "-lite".
-        #expect(TranscriptionModel.available(inModelList: list).map(\.id) == ["gemini-3.5-flash-lite", "gemini-3.6-flash"])
+        // Claude can't hear audio.
+        #expect(TranscriptionModel.available(inModelList: list) == testModelPair)
+    }
+
+    @Test func aLongerNameIsntTheModel() {
+        // "-lite" is a different model, and so is a name that carries on.
+        #expect(TranscriptionModel.available(inModelList: "\(testModelID)-lite\n\(testModelID) lite\n\(testModelID)2").isEmpty)
     }
 
     @Test func availableModelsMatchDisplayNamesAndPreviewSlugs() {
-        #expect(TranscriptionModel.available(inModelList: "Gemini 3.1 Pro\ngemini-3.6-flash-preview").map(\.id) == ["gemini-3.6-flash", "gemini-3.1-pro"])
+        #expect(TranscriptionModel.available(inModelList: "\(otherTestModel.displayName)\n\(testModelID)-preview") == testModelPair)
         #expect(TranscriptionModel.available(inModelList: "gpt-oss-120b").isEmpty)
     }
 }

@@ -79,7 +79,7 @@ struct TranscriberTests {
         let clipID = UUID()
 
         let events = try await collect(transcriber.run(
-            [TranscriptionJob(clipID: clipID, url: audio, duration: 7, chunks: nil)], model: "gemini-3.6-flash", context: "names"
+            [TranscriptionJob(clipID: clipID, url: audio, duration: 7, chunks: nil)], model: testModelID, context: "names"
         ))
 
         #expect(events.first == .planned(clipID: clipID, chunks: [0..<3, 3..<7]))
@@ -89,7 +89,7 @@ struct TranscriberTests {
         }
         #expect(finished.flatMap { $0 }.map(\.start).sorted() == [0.5, 3.5])
         #expect(engine.calls.count == 2)
-        #expect(engine.calls.allSatisfy { $0.model == "gemini-3.6-flash" && $0.context == "names" && $0.audioExisted })
+        #expect(engine.calls.allSatisfy { $0.model == testModelID && $0.context == "names" && $0.audioExisted })
         #expect(engine.calls.map(\.duration).sorted() == [3, 4])
     }
 
@@ -204,20 +204,26 @@ struct TranscriptionControllerTests {
 
     @Test func modelChoiceFallsBackToTheCheapestAvailableAndIsRemembered() async throws {
         let defaults = try #require(UserDefaults(suiteName: "transcription-\(UUID().uuidString)"))
-        let lite = TranscriptionModel.catalog[1]
-        let flash = TranscriptionModel.catalog[3]
-        let controller = TranscriptionController(engine: ScriptedEngine(status: .ready([lite, flash])), cache: nil, defaults: defaults)
+        let cheaper = testModelPair[0]
+        let pricier = testModelPair[1]
+        let controller = TranscriptionController(engine: ScriptedEngine(status: .ready([cheaper, pricier])), cache: nil, defaults: defaults)
 
         await controller.refreshStatus()
-        #expect(controller.availableModels == [lite, flash])
-        #expect(controller.selectedModel == lite, "defaults to the cheapest available")
+        #expect(controller.availableModels == [cheaper, pricier])
+        #expect(controller.selectedModel == cheaper, "defaults to the cheapest available")
 
-        controller.preferredModelID = flash.id
-        #expect(controller.selectedModel == flash)
-        let relaunched = TranscriptionController(engine: ScriptedEngine(status: .ready([lite])), cache: nil, defaults: defaults)
-        #expect(relaunched.preferredModelID == flash.id)
+        var modelChanges = 0
+        controller.onModelChange = { modelChanges += 1 }
+        controller.preferredModelID = pricier.id
+        #expect(controller.selectedModel == pricier)
+        #expect(modelChanges == 1, "picking another model transcribes again")
+        controller.preferredModelID = pricier.id
+        #expect(modelChanges == 1, "picking the same model doesn't")
+
+        let relaunched = TranscriptionController(engine: ScriptedEngine(status: .ready([cheaper])), cache: nil, defaults: defaults)
+        #expect(relaunched.preferredModelID == pricier.id)
         await relaunched.refreshStatus()
-        #expect(relaunched.selectedModel == lite, "a remembered model that's no longer offered falls back to the cheapest")
+        #expect(relaunched.selectedModel == cheaper, "a remembered model that's no longer offered falls back to the cheapest")
     }
 
     @Test func removingAClipDropsItsTranscript() async throws {

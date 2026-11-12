@@ -10,11 +10,11 @@ import Testing
 struct AgyCommandTests {
 
     @Test func transcribeCommandIsHeadlessJSONWithTheChosenModel() throws {
-        let arguments = AgyCommand.transcribe(fileName: "chunk-1.m4a", duration: 180, model: "gemini-3.6-flash", context: "", timeout: .seconds(300))
+        let arguments = AgyCommand.transcribe(fileName: "chunk-1.m4a", duration: 180, model: testModelID, context: "", timeout: .seconds(300))
         #expect(arguments.first == "-p")
         #expect(arguments.contains("--output-format"))
         #expect(value(after: "--output-format", in: arguments) == "json")
-        #expect(value(after: "--model", in: arguments) == "gemini-3.6-flash")
+        #expect(value(after: "--model", in: arguments) == testModelID)
         #expect(value(after: "--print-timeout", in: arguments) == "300s")
         let schema = try #require(value(after: "--json-schema", in: arguments))
         #expect((try? JSONSerialization.jsonObject(with: Data(schema.utf8))) != nil, "Schema must be valid JSON")
@@ -104,26 +104,24 @@ struct AgyEngineProcessTests {
         try Data([0]).write(to: audio)
 
         let engine = AgyEngine(executable: fake.url)
-        let segments = try await engine.transcribe(audio: audio, duration: 30, model: "gemini-3.5-flash-lite", context: "Swift")
+        let segments = try await engine.transcribe(audio: audio, duration: 30, model: testModelID, context: "Swift")
         #expect(segments == [TranscriptSegment(start: 0.25, end: 1, text: "Hi.")])
 
         let arguments = try fake.log("args").split(separator: "\0").map(String.init)
-        #expect(arguments.contains("gemini-3.5-flash-lite"))
+        #expect(arguments.contains(testModelID))
         #expect(arguments.contains { $0.contains("@chunk-7.m4a") && $0.contains("Swift") })
         #expect(try fake.log("files").contains("chunk-7.m4a"), "agy must run in the folder holding the chunk")
     }
 
     @Test func statusListsOnlyCatalogModelsFromAgyModels() async throws {
+        // Listed most expensive first, with a model that can't hear audio.
         let fake = try FakeAgy(#"""
         [ "$1" = "models" ] || exit 2
-        printf 'claude-sonnet-5-5\ngemini-3.6-flash\ngemini-3.5-flash-lite\n'
+        printf 'claude-sonnet-5-5\n\#(testModelPair[1].id)\n\#(testModelPair[0].id)\n'
         """#)
         defer { fake.remove() }
         let status = await AgyEngine(executable: fake.url).checkStatus()
-        #expect(status == .ready([
-            TranscriptionModel.catalog.first { $0.id == "gemini-3.5-flash-lite" }!,
-            TranscriptionModel.catalog.first { $0.id == "gemini-3.6-flash" }!,
-        ]))
+        #expect(status == .ready(testModelPair))
     }
 
     @Test func signedOutAgyIsReportedAsNotSignedIn() async throws {
