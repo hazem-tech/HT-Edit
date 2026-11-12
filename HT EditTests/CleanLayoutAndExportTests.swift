@@ -244,7 +244,7 @@ struct TranscriptReviewTests {
         let structured = #"{"status":"SUCCESS","structured_output":{"highlights":[{"first":2,"last":3,"reason":"Repeats line 1"}]}}"#
         #expect(try AgyOutputParser.findings(from: structured) == [ReviewFinding(first: 2, last: 3, reason: "Repeats line 1")])
 
-        let text = #"{"status":"SUCCESS","response":"Sure:\n```json\n{\"highlights\":[{\"first\":\"#4\",\"last\":5.0,\"reason\":\" Filler \"}]}\n```"}"#
+        let text = ##"{"status":"SUCCESS","response":"Sure:\n```json\n{\"highlights\":[{\"first\":\"#4\",\"last\":5.0,\"reason\":\" Filler \"}]}\n```"}"##
         #expect(try AgyOutputParser.findings(from: text) == [ReviewFinding(first: 4, last: 5, reason: "Filler")])
 
         #expect(try AgyOutputParser.findings(from: #"{"status":"SUCCESS","structured_output":{"highlights":[]}}"#).isEmpty)

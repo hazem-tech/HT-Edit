@@ -9,6 +9,7 @@
 
 import Foundation
 import Observation
+import os
 
 /// A ready-made question for the transcript review.
 nonisolated enum ReviewPreset: String, CaseIterable, Identifiable, Sendable {

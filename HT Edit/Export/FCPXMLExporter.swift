@@ -285,28 +285,41 @@ nonisolated enum FCPXMLExporter {
         guard let track = try? await asset.loadTracks(withMediaType: .timecode).first,
               let reader = try? AVAssetReader(asset: asset) else { return .zero }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
-        guard reader.canAdd(output) else { return .zero }
-        reader.add(output)
-        guard reader.startReading() else { return .zero }
-        defer { reader.cancelReading() }
-        guard let sample = output.copyNextSampleBuffer(),
-              let block = CMSampleBufferGetDataBuffer(sample),
-              let format = CMSampleBufferGetFormatDescription(sample) else { return .zero }
+        let provider = reader.outputProvider(for: output)
+        do {
+            try reader.start()
+            defer {
+                if reader.status == .reading { reader.cancelReading() }
+            }
+            guard let sample = try await provider.next() else { return .zero }
+            return try sample.withUnsafeSampleBuffer { try timecodeTime(in: $0) }
+        } catch {
+            return .zero
+        }
+    }
 
+    private enum TimecodeError: Error {
+        case unreadable
+    }
+
+    /// The time a timecode sample stands for: its frame number times its frame duration.
+    private static func timecodeTime(in sample: CMSampleBuffer) throws -> CMTime {
+        guard let block = CMSampleBufferGetDataBuffer(sample),
+              let format = CMSampleBufferGetFormatDescription(sample) else { throw TimecodeError.unreadable }
         let frameNumber: Int64
         switch CMFormatDescriptionGetMediaSubType(format) {
         case kCMTimeCodeFormatType_TimeCode32:
             var value: Int32 = 0
             let status = withUnsafeMutableBytes(of: &value) { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: 4, destination: $0.baseAddress!) }
-            guard status == kCMBlockBufferNoErr else { return .zero }
+            guard status == kCMBlockBufferNoErr else { throw TimecodeError.unreadable }
             frameNumber = Int64(Int32(bigEndian: value))
         case kCMTimeCodeFormatType_TimeCode64:
             var value: Int64 = 0
             let status = withUnsafeMutableBytes(of: &value) { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: 8, destination: $0.baseAddress!) }
-            guard status == kCMBlockBufferNoErr else { return .zero }
+            guard status == kCMBlockBufferNoErr else { throw TimecodeError.unreadable }
             frameNumber = Int64(bigEndian: value)
         default:
-            return .zero
+            throw TimecodeError.unreadable
         }
         let frame = CMTimeCodeFormatDescriptionGetFrameDuration(format)
         guard frameNumber > 0, frame.isNumeric, frame.value > 0 else { return .zero }
