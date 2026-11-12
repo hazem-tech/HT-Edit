@@ -399,15 +399,20 @@ final class EditorViewModel {
         currentTime = range.start
         Task {
             _ = await player.seek(to: range.start, toleranceBefore: .zero, toleranceAfter: .zero)
-            guard previewRange == range else { return }
-            isPreviewPlaying = true
-            previewObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: range.end)], queue: .main) { [weak self] in
-                MainActor.assumeIsolated {
-                    self?.finishPreview()
-                }
-            }
-            player.play()
+            playPreview(range)
         }
+    }
+
+    /// The preview reached its start: play it, and pause at its end.
+    private func playPreview(_ range: CMTimeRange) {
+        guard previewRange == range else { return }
+        isPreviewPlaying = true
+        previewObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: range.end)], queue: .main) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.finishPreview()
+            }
+        }
+        player.play()
     }
 
     /// Adds a marker at the playhead (the M key). It belongs to the clip there.
