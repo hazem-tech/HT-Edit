@@ -215,13 +215,6 @@ nonisolated enum AgyOutputParser {
 
 /// Runs the installed `agy`. Finding it is cached; everything else runs per call.
 actor AgyEngine: TranscriptionEngine {
-    /// Where to look when `agy` isn't on the login shell's `PATH`. The installer uses `~/.local/bin`.
-    nonisolated static let candidateDirectories = [
-        URL.homeDirectory.appending(path: ".local/bin", directoryHint: .isDirectory),
-        URL(filePath: "/opt/homebrew/bin", directoryHint: .isDirectory),
-        URL(filePath: "/usr/local/bin", directoryHint: .isDirectory),
-    ]
-
     private let fixedExecutable: URL?
     private let chunkTimeout: Duration
     private var located: URL?
@@ -280,27 +273,12 @@ actor AgyEngine: TranscriptionEngine {
         return located
     }
 
-    /// Apps launched from the Finder don't get the shell's `PATH`, so check the
-    /// usual install folders, then ask the login shell.
     private static func locate() async -> URL? {
-        for directory in candidateDirectories {
-            let candidate = directory.appending(path: "agy", directoryHint: .notDirectory)
-            if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
-        }
-        guard let output = try? await ProcessRunner.run(
-            URL(filePath: "/bin/zsh"), arguments: ["-lc", "command -v agy"], timeout: .seconds(5)
-        ), output.status == 0,
-              let path = output.stdout.split(separator: "\n").last.map(String.init),
-              path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) else { return nil }
-        return URL(filePath: path)
+        await ExecutableLocator.locate("agy")
     }
 
     /// The app's environment with `agy`'s folder and the usual tool folders on `PATH`.
     private nonisolated func environment(for agy: URL) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        let extra = [agy.deletingLastPathComponent().path] + Self.candidateDirectories.map(\.path)
-        let existing = environment["PATH"].map { [$0] } ?? ["/usr/bin:/bin:/usr/sbin:/sbin"]
-        environment["PATH"] = (extra + existing).joined(separator: ":")
-        return environment
+        ExecutableLocator.environment(for: agy)
     }
 }

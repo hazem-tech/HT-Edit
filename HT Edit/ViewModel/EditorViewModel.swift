@@ -25,7 +25,8 @@ enum PlaybackStatus: Equatable {
 ///    waits for the other.
 ///
 /// Settings changes only re-run the pure silence detector over the stored
-/// levels, so highlights update instantly. Playback always skips silences.
+/// levels, so highlights update instantly. Playback always skips silences,
+/// and the words deleted in the transcript.
 @Observable
 final class EditorViewModel {
 
@@ -37,6 +38,12 @@ final class EditorViewModel {
     private(set) var clips: [Clip] = []
     private(set) var currentTime: CMTime = .zero
     private(set) var silences: [CMTimeRange] = []
+    /// Words deleted in the transcript (`TimelineWord.id`).
+    private(set) var deletedWordIDs: Set<String> = []
+    /// Where the deleted words are cut, per clip in clip time.
+    private(set) var wordCuts: [WordCut] = []
+    /// What playback skips: silences and cut words, on the timeline, sorted and non-overlapping.
+    private(set) var skipRanges: [CMTimeRange] = []
     private(set) var playbackStatus: PlaybackStatus = .idle
     /// Bumped whenever stored levels change, so views depending on them refresh.
     private(set) var levelsRevision = 0
@@ -87,6 +94,19 @@ final class EditorViewModel {
     }
 
     var totalSilenceDuration: CMTime { SilenceDetector.totalDuration(of: silences) }
+
+    /// Cut words on the timeline.
+    var cutRanges: [CMTimeRange] {
+        let placed = placedClips
+        let starts = Dictionary(uniqueKeysWithValues: zip(placed.map(\.id), ClipTimeline.starts(for: placed.map(\.duration))))
+        return wordCuts.compactMap { cut in
+            guard let start = starts[cut.clipID] else { return nil }
+            return CMTimeRange(
+                start: start + CMTime(seconds: cut.start, preferredTimescale: 48_000),
+                end: start + CMTime(seconds: cut.end, preferredTimescale: 48_000)
+            )
+        }
+    }
 
     // MARK: Private state
 
@@ -173,6 +193,8 @@ final class EditorViewModel {
         }
         clips.removeAll { ids.contains($0.id) }
         transcription.remove(ids)
+        let removedPrefixes = ids.map(\.uuidString)
+        deletedWordIDs = deletedWordIDs.filter { id in !removedPrefixes.contains { id.hasPrefix($0) } }
         levelsRevision += 1
         recomputeSilences()
 
@@ -250,6 +272,33 @@ final class EditorViewModel {
     private func updateClip(_ id: UUID, _ update: (inout Clip) -> Void) {
         guard let index = clips.firstIndex(where: { $0.id == id }) else { return }
         update(&clips[index])
+    }
+
+    // MARK: Transcript editing
+
+    /// Transcribes every clip on the timeline again. Deleted words are restored:
+    /// the new transcript has new words.
+    func transcribeAll() {
+        deletedWordIDs = []
+        transcription.transcribe(placedClips)
+        recomputeSkips()
+    }
+
+    /// Deletes `ids` from the edit (playback skips them), or restores them if
+    /// they're all deleted already.
+    func toggleDeletion(of ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        if ids.isSubset(of: deletedWordIDs) {
+            deletedWordIDs.subtract(ids)
+        } else {
+            deletedWordIDs.formUnion(ids)
+        }
+        recomputeSkips()
+    }
+
+    func restoreAllWords() {
+        deletedWordIDs = []
+        recomputeSkips()
     }
 
     // MARK: Transport
@@ -346,6 +395,27 @@ final class EditorViewModel {
             durations: placed.map(\.duration),
             settings: settings
         )
+        recomputeSkips()
+    }
+
+    /// Re-plans the word cuts (they snap to the quietest point of each pause,
+    /// so they follow the levels) and what playback skips.
+    private func recomputeSkips() {
+        if deletedWordIDs.isEmpty {
+            wordCuts = []
+        } else {
+            let wordsByClip = Dictionary(grouping: timelineTranscript.flatMap(\.words), by: \.clipID)
+            wordCuts = placedClips.flatMap { clip in
+                WordCutPlanner.cuts(
+                    clipID: clip.id,
+                    words: wordsByClip[clip.id] ?? [],
+                    deleted: deletedWordIDs,
+                    levels: levelsStore[clip.id],
+                    clipDuration: clip.duration.seconds
+                )
+            }
+        }
+        skipRanges = WordCutPlanner.union(silences, cutRanges)
         installBoundaryObserver()
     }
 
@@ -401,8 +471,8 @@ final class EditorViewModel {
             player.removeTimeObserver(token)
             boundaryObserver = nil
         }
-        guard !silences.isEmpty else { return }
-        let times = silences.map { NSValue(time: $0.start) }
+        guard !skipRanges.isEmpty else { return }
+        let times = skipRanges.map { NSValue(time: $0.start) }
         boundaryObserver = player.addBoundaryTimeObserver(forTimes: times, queue: .main) { [weak self] in
             MainActor.assumeIsolated {
                 self?.skipIfInsideSilence()
@@ -413,7 +483,7 @@ final class EditorViewModel {
     private func skipIfInsideSilence() {
         guard !isSkipping, player.rate != 0 else { return }
         let probe = player.currentTime() + Self.skipLookahead
-        guard let target = PlaybackSkipper.skipTarget(for: probe, in: silences) else { return }
+        guard let target = PlaybackSkipper.skipTarget(for: probe, in: skipRanges) else { return }
         isSkipping = true
         Task {
             _ = await player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)

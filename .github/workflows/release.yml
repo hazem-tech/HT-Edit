@@ -1,0 +1,73 @@
+name: Release
+
+# Builds HT Edit and attaches it to a GitHub Release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# or run it by hand from the Actions tab (it then needs a tag name).
+# The app is ad-hoc signed, not notarized: no Apple developer account needed.
+# On first open macOS blocks it; see "Install" in the README.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (created on the current commit if missing), e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  PROJECT: HT Edit.xcodeproj
+  SCHEME: HT Edit
+  SIGNING: CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/HTEdit.xcarchive \
+            MARKETING_VERSION="$VERSION" \
+            $SIGNING \
+            2>&1 | xcbeautify --renderer github-actions
+
+      - name: Package
+        run: |
+          set -e
+          app="build/HTEdit.xcarchive/Products/Applications/HT Edit.app"
+          codesign --verify --deep --strict "$app"
+          mkdir -p dist dmg
+          ditto -c -k --keepParent "$app" "dist/HT-Edit-$TAG.zip"
+          ditto "$app" "dmg/HT Edit.app"
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "HT Edit" -srcfolder dmg -ov -format UDZO "dist/HT-Edit-$TAG.dmg"
+          ls -lh dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "HT Edit $VERSION" --generate-notes
+          fi

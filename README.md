@@ -14,6 +14,20 @@ Two clips on one timeline. Silences are highlighted on the waveform, and a yello
 
 The clips are test videos the app generates itself: solid green frames, with a tone, then silence, then a tone. CI captures these screenshots by running the `ReadmeScreenshots` UI tests. To refresh them, run the **README screenshots** workflow.
 
+## Install
+
+Download `HT-Edit-….dmg` from [Releases](../../releases), open it and drag HT Edit to Applications. It needs macOS 27.
+
+The app isn't notarized by Apple, so macOS blocks it the first time:
+1. Open HT Edit once, and click **Done** when macOS says it can't check it.
+2. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to HT Edit.
+
+Or, in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/HT Edit.app"
+```
+
 ## Features
 
 - **Import:** ⌘O, the **+** toolbar button, or drag and drop. You can import several files at once; new clips are added to the end.
@@ -22,7 +36,8 @@ The clips are test videos the app generates itself: solid green frames, with a t
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
 - **Live settings:** threshold (dB), padding start and padding end. Highlights update instantly.
 - **Playback:** always skips the highlighted silences.
-- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Transcript with timestamps:** in the inspector, open the **Transcript** tab and press **Transcribe**. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Then press **Delete** (⌘⌫). Playback skips the deleted words, and they're shown struck through in the transcript and in purple on the waveform. Select deleted words and press **Restore** to put them back, or use **Restore All**.
 
 ## Transcription
 
@@ -40,7 +55,20 @@ How it works:
 - HT Edit runs `agy -p … --output-format json --json-schema …` on two chunks at a time.
 - The timestamped segments are placed on the timeline as they arrive.
 - A failed chunk is retried once; anything that still fails can be retried on its own.
-- Finished transcripts are cached per file, model and context.
+- Finished transcripts are cached per file, model and context. Transcribing the same file again shows the text at once. If its word times were estimated, only the word timing runs again, not the transcription.
+
+### Word timing
+
+Gemini gets the words right, but it only guesses when each word was said. To cut single words cleanly, HT Edit measures word times on the audio itself, using **forced alignment**. The text is already known, so the aligner only has to find where each word sits in the waveform. It uses Meta's MMS alignment model, which covers 1,100+ languages, Arabic included, and listens in 20 ms frames.
+
+**One-time setup:** install [uv](https://docs.astral.sh/uv/): `brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`. That's all. On the first transcription, uv downloads its own private Python and PyTorch, and the model downloads from Hugging Face (about 2–3 GB in all, into their caches). It never uses or changes the Python on your Mac. Later runs work offline. Without uv, word times are estimated from each line's time (shown with a dotted underline). Downloads check certificates against your Mac's own trust store (the same as Safari), not Python's bundled list.
+
+How cuts are placed:
+- Word times from an aligner are good to a few tens of milliseconds. In connected speech, and especially in Arabic, there often isn't an exact boundary between two words anyway.
+- So a cut doesn't sit on a word's edge. It moves to the **quietest 10 ms** in the pause before the first deleted word, and again in the pause after the last one. The join then falls where there's the least sound to break, and there's no crossfade.
+- When the deleted words run straight into their neighbors with no pause, the cut still goes to the quietest point it can find.
+
+To check word timing by hand, run `zsh scripts/align-probe.sh`. It runs the exact command HT Edit uses (`uv run --script align.py …`) on a short spoken clip.
 
 To check your installation by hand, run `zsh scripts/agy-probe.sh`. It runs the exact command HT Edit uses on a short clip with speech.
 
@@ -63,6 +91,7 @@ Running `agy` and reading your sign-in means HT Edit runs **without the App Sand
 | Playback | `Playback/CompositionBuilder.swift` (`AVMutableComposition`; `AVVideoComposition.Configuration` for mixed orientations), `Analysis/PlaybackSkipper.swift` |
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
 | Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
+| Word timing and cuts | `Transcription/WordAligner.swift` (runs `align.py` through `uv`), `Transcription/align.py` (MMS forced alignment), `Model/TranscriptWords.swift`, `Model/WordCuts.swift` (cuts snapped to the quietest point of each pause) |
 | UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`), `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
@@ -80,6 +109,16 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 - Unit tests include end-to-end imports of generated H.264, HEVC, portrait and audio-only files. They check that playback becomes ready, that frames are not black, that analysis finishes, and that silences are found.
 - Transcription tests run the real `agy` runner against fake `agy` scripts: success, signed out, errors, hangs, cancellation and large output. They also cover the chunking, the limit of two requests at a time, the retry and the cache, using real exported audio. CI has no Google sign-in, so a real transcription is checked by hand with `scripts/agy-probe.sh`.
 - UI tests launch the app with `-UITestFixture <kind>` (Debug builds only), which makes the app generate and import a file. They check the clip row, that analysis finishes, the video pixels, right-click Delete, the Delete key, and the **+** and Import buttons. With `-UITestFakeTranscription 1`, a built-in fake stands in for Antigravity, and the Transcript tab is tested end to end.
+
+### Releases
+
+`.github/workflows/release.yml` builds the app on GitHub and attaches a `.dmg` and a `.zip` to a GitHub Release. It's ad-hoc signed, so no Apple developer account is needed. To publish a version:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Or run the **Release** workflow from the Actions tab and type a tag.
 
 ### Diagnostics
 

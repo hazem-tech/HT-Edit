@@ -6,7 +6,7 @@
 import CoreMedia
 import SwiftUI
 
-/// Draws the ruler, waveform, silence highlights, clip boundaries and threshold
+/// Draws the ruler, waveform, silence and cut-word highlights, clip boundaries and threshold
 /// line for the visible slice of the timeline only, so cost is independent of
 /// media length and clip count.
 ///
@@ -15,6 +15,8 @@ import SwiftUI
 struct WaveformCanvas: View {
     let lanes: [ClipLane]
     let silences: [CMTimeRange]
+    /// Words deleted in the transcript, sorted.
+    var cuts: [CMTimeRange] = []
     let thresholdDB: Double
     /// Horizontal scroll offset of the visible slice, in points.
     let offset: CGFloat
@@ -35,7 +37,8 @@ struct WaveformCanvas: View {
             let wave = CGRect(x: 0, y: Self.rulerHeight, width: size.width, height: size.height - Self.rulerHeight)
 
             context.fill(Path(roundedRect: wave, cornerRadius: 6), with: .color(.secondary.opacity(0.08)))
-            drawSilences(in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            drawRanges(silences, color: .red, in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
+            drawRanges(cuts, color: .purple, in: &context, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
             for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
                 drawWaveform(of: lane, in: &context, wave: wave, visibleStart: visibleStart)
             }
@@ -49,10 +52,12 @@ struct WaveformCanvas: View {
         CGFloat(seconds - visibleStart) * pixelsPerSecond
     }
 
-    private func drawSilences(in context: inout GraphicsContext, wave: CGRect, visibleStart: Double, visibleEnd: Double) {
+    /// Highlights sorted `ranges`: a tinted band with a strong top edge.
+    private func drawRanges(_ ranges: [CMTimeRange], color: Color, in context: inout GraphicsContext, wave: CGRect, visibleStart: Double, visibleEnd: Double) {
+        guard !ranges.isEmpty else { return }
         var fill = Path()
         var edges = Path()
-        for range in silences {
+        for range in ranges {
             let start = range.start.seconds
             let end = range.end.seconds
             if end < visibleStart { continue }
@@ -63,8 +68,8 @@ struct WaveformCanvas: View {
             fill.addRect(rect)
             edges.addRect(CGRect(x: rect.minX, y: wave.minY, width: rect.width, height: 3))
         }
-        context.fill(fill, with: .color(.red.opacity(0.22)))
-        context.fill(edges, with: .color(.red.opacity(0.8)))
+        context.fill(fill, with: .color(color.opacity(0.22)))
+        context.fill(edges, with: .color(color.opacity(0.8)))
     }
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for

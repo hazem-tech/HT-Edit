@@ -25,6 +25,10 @@ final class TranscriptionController {
     // MARK: State
 
     private(set) var engineStatus: EngineStatus = .unknown
+    /// Whether word times are measured on the audio or estimated.
+    private(set) var wordTimingStatus: WordTimingStatus = .unknown
+    /// Why word timing failed for part of the last run, if it did.
+    private(set) var wordTimingFailure: String?
     private(set) var phase: Phase = .idle
     /// Clip-relative segments per clip, sorted by start.
     private(set) var transcripts: [UUID: [TranscriptSegment]] = [:]
@@ -76,6 +80,7 @@ final class TranscriptionController {
     // MARK: Private
 
     private let engine: any TranscriptionEngine
+    private let aligner: (any WordAligner)?
     private let transcriber: Transcriber
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var runTask: Task<Void, Never>?
@@ -83,9 +88,17 @@ final class TranscriptionController {
 
     /// - Parameters:
     ///   - defaults: where the model choice is remembered; `nil` doesn't remember it (tests).
-    init(engine: any TranscriptionEngine, cache: TranscriptCache? = .shared, defaults: UserDefaults? = .standard, chunkLength: Double = 180) {
+    ///   - aligner: measures word times; `nil` estimates them.
+    init(
+        engine: any TranscriptionEngine,
+        cache: TranscriptCache? = .shared,
+        defaults: UserDefaults? = .standard,
+        chunkLength: Double = 180,
+        aligner: (any WordAligner)? = nil
+    ) {
         self.engine = engine
-        self.transcriber = Transcriber(engine: engine, cache: cache, chunkLength: chunkLength)
+        self.aligner = aligner
+        self.transcriber = Transcriber(engine: engine, cache: cache, chunkLength: chunkLength, aligner: aligner)
         self.defaults = defaults
         self.preferredModelID = defaults?.string(forKey: Self.modelDefaultsKey)
     }
@@ -97,7 +110,7 @@ final class TranscriptionController {
             return TranscriptionController(engine: engine, cache: nil, defaults: nil)
         }
         #endif
-        return TranscriptionController(engine: AgyEngine())
+        return TranscriptionController(engine: AgyEngine(), aligner: UVWordAligner())
     }
 
     // MARK: Actions
@@ -106,7 +119,15 @@ final class TranscriptionController {
     func refreshStatus() async {
         guard engineStatus != .checking else { return }
         engineStatus = .checking
-        engineStatus = await engine.checkStatus()
+        if let aligner {
+            wordTimingStatus = .checking
+            async let timing = aligner.checkStatus()
+            engineStatus = await engine.checkStatus()
+            wordTimingStatus = await timing
+        } else {
+            engineStatus = await engine.checkStatus()
+            wordTimingStatus = .notInstalled
+        }
     }
 
     /// Transcribes `clips` from scratch (replacing earlier transcripts of them).
@@ -151,6 +172,7 @@ final class TranscriptionController {
         finishedChunks = [:]
         failedChunks = [:]
         lastFailureMessage = nil
+        wordTimingFailure = nil
         guard !jobs.isEmpty else { return }
         phase = .running
         let wanted = Set(jobs.map(\.clipID))
@@ -200,6 +222,12 @@ final class TranscriptionController {
             guard wanted.contains(clipID), plannedChunks[clipID] != nil else { return }
             failedChunks[clipID, default: []].append(chunk)
             lastFailureMessage = message
+        case .wordsMeasured(let clipID, let segments):
+            guard wanted.contains(clipID) else { return }
+            transcripts[clipID] = segments
+        case .wordTimingFailed(let clipID, _, let message):
+            guard wanted.contains(clipID) else { return }
+            wordTimingFailure = message
         }
     }
 }
