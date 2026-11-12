@@ -10,13 +10,13 @@ import SwiftUI
 /// threshold line for the visible slice of the timeline only, so cost is
 /// independent of media length and clip count.
 ///
-/// Removed parts (silences, cut words, no speech) look disabled: a faint gray
-/// band with the waveform grayed out, and a gray bar along each part's top
+/// Removed parts (silences, cut words, no speech) look disabled: the same
+/// blue waveform, dimmed, and a thin dark bar along each part's top
 /// edge that the timeline shows a hover card for. Parts are split wherever
 /// the reason changes, and each has its own bar.
 ///
 /// With an `editMap` (the Clean layout), the timeline is drawn in edited
-/// time: only the kept pieces, back to back, and nothing grayed out.
+/// time: only the kept pieces, back to back, and nothing dimmed.
 ///
 /// Inputs are plain values; SwiftUI only re-renders when they change, never
 /// on playhead movement (the playhead lives in its own overlay).
@@ -37,8 +37,9 @@ struct WaveformCanvas: View {
 
     /// dBFS mapped to the bottom of the waveform; matches the threshold slider's minimum.
     static let floorDB = Float(SilenceSettings.thresholdRange.lowerBound)
-    /// The waveform: white in dark mode (and near-black in light mode, where white wouldn't show).
-    static let waveColor = Color.primary
+    /// The waveform: a light blue peak layer behind a solid blue average (RMS) layer.
+    static let peakColor = Color.accentColor.opacity(0.35)
+    static let rmsColor = Color.accentColor
     static let rulerHeight: CGFloat = 18
     /// The gray bar along the top of each removed part.
     static let removedBarHeight: CGFloat = 5
@@ -63,31 +64,36 @@ struct WaveformCanvas: View {
             context.fill(Path(roundedRect: wave, cornerRadius: 6), with: .color(.secondary.opacity(0.08)))
 
             let (removedPath, bars, hoveredBar) = removedShapes(wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd)
-            context.fill(removedPath, with: .color(.gray.opacity(0.12)))
 
             var peaks = Path()
+            var rms = Path()
             if let editMap {
-                addKeptWaveform(editMap, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd, peaks: &peaks)
+                addKeptWaveform(editMap, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd, peaks: &peaks, rms: &rms)
             } else {
                 for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
-                    addWaveform(of: lane, from: lane.start, to: lane.start + lane.duration, shownAt: lane.start, wave: wave, visibleStart: visibleStart, peaks: &peaks)
+                    addWaveform(of: lane, from: lane.start, to: lane.start + lane.duration, shownAt: lane.start, wave: wave, visibleStart: visibleStart, peaks: &peaks, rms: &rms)
                 }
             }
             if removedPath.isEmpty {
-                context.fill(peaks, with: .color(Self.waveColor))
+                context.fill(peaks, with: .color(Self.peakColor))
+                context.fill(rms, with: .color(Self.rmsColor))
             } else {
                 var kept = context
                 kept.clip(to: removedPath, options: .inverse)
-                kept.fill(peaks, with: .color(Self.waveColor))
+                kept.fill(peaks, with: .color(Self.peakColor))
+                kept.fill(rms, with: .color(Self.rmsColor))
 
-                var disabled = context
-                disabled.clip(to: removedPath)
-                disabled.opacity = Self.disabledOpacity
-                disabled.fill(peaks, with: .color(.gray))
+                // Removed parts: the same waveform, only dimmer. No gray band over them.
+                var dimmed = context
+                dimmed.clip(to: removedPath)
+                dimmed.opacity = Self.disabledOpacity
+                dimmed.fill(peaks, with: .color(Self.peakColor))
+                dimmed.fill(rms, with: .color(Self.rmsColor))
             }
-            context.fill(bars, with: .color(.gray.opacity(0.45)))
+            // A thin, dark bar marks each removed part (and is what its hover card answers to).
+            context.fill(bars, with: .color(.primary.opacity(0.2)))
             if !hoveredBar.isEmpty {
-                context.fill(hoveredBar, with: .color(.gray.opacity(0.9)))
+                context.fill(hoveredBar, with: .color(.primary.opacity(0.55)))
             }
 
             drawThreshold(in: &context, wave: wave)
@@ -107,7 +113,7 @@ struct WaveformCanvas: View {
     }
 
     /// The Clean layout: each visible kept piece, with the part of each clip it covers.
-    private func addKeptWaveform(_ map: EditMap, wave: CGRect, visibleStart: Double, visibleEnd: Double, peaks: inout Path) {
+    private func addKeptWaveform(_ map: EditMap, wave: CGRect, visibleStart: Double, visibleEnd: Double, peaks: inout Path, rms: inout Path) {
         let pieces = map.pieces
         for index in map.firstIndex(endingAfterEdited: visibleStart)..<pieces.count {
             let piece = pieces[index]
@@ -117,7 +123,7 @@ struct WaveformCanvas: View {
                 let end = min(piece.source.upperBound, lane.start + lane.duration)
                 guard end > start else { continue }
                 let shownAt = piece.editedStart + (start - piece.source.lowerBound)
-                addWaveform(of: lane, from: start, to: end, shownAt: shownAt, wave: wave, visibleStart: visibleStart, peaks: &peaks)
+                addWaveform(of: lane, from: start, to: end, shownAt: shownAt, wave: wave, visibleStart: visibleStart, peaks: &peaks, rms: &rms)
             }
         }
     }
@@ -149,10 +155,8 @@ struct WaveformCanvas: View {
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for
     /// full-timeline seconds `start..<end`, drawn from timeline position
-    /// `shownAt`, for the columns they cover on screen, adding its bars to `peaks`.
-    ///
-    /// Only the peak level is drawn: it's what word cuts are placed by (the
-    /// quietest peak in a pause), so what you see is what cuts follow.
+    /// `shownAt`, for the columns they cover on screen, adding its bars to
+    /// `peaks` and `rms`.
     private func addWaveform(
         of lane: ClipLane,
         from start: Double,
@@ -160,7 +164,8 @@ struct WaveformCanvas: View {
         shownAt: Double,
         wave: CGRect,
         visibleStart: Double,
-        peaks peakPath: inout Path
+        peaks peakPath: inout Path,
+        rms rmsPath: inout Path
     ) {
         let levels = lane.levels
         guard levels.windowCount > 0, levels.windowSeconds > 0 else { return }
@@ -182,6 +187,7 @@ struct WaveformCanvas: View {
         guard windowsPerColumn.isFinite, startWindow.isFinite, abs(startWindow) < Double(Int.max / 4) else { return }
 
         let peaks = WaveformSampler.buckets(levels.peakDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
+        let rms = WaveformSampler.buckets(levels.rmsDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
 
         let midY = wave.midY
         let halfHeight = wave.height / 2 - 2
@@ -189,8 +195,12 @@ struct WaveformCanvas: View {
             let x = CGFloat(firstColumn + column) * Self.barStep
             guard x >= laneMinX - Self.barStep, x < laneMaxX else { continue }
             let peakHeight = CGFloat(WaveformSampler.normalized(peaks[column], floorDB: Self.floorDB)) * halfHeight
+            let rmsHeight = CGFloat(WaveformSampler.normalized(rms[column], floorDB: Self.floorDB)) * halfHeight
             if peakHeight > 0 {
                 peakPath.addRect(CGRect(x: x, y: midY - peakHeight, width: Self.barWidth, height: peakHeight * 2))
+            }
+            if rmsHeight > 0 {
+                rmsPath.addRect(CGRect(x: x, y: midY - rmsHeight, width: Self.barWidth, height: rmsHeight * 2))
             }
         }
     }

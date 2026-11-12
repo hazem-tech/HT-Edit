@@ -170,7 +170,7 @@ struct ContentView: View {
             .labelsHidden()
             .fixedSize()
             .disabled(!model.hasMedia)
-            .help("Full shows removed parts grayed out; Clean leaves them out of the timeline and the transcript")
+            .help("Full shows removed parts dimmed; Clean leaves them out of the timeline and the transcript")
             .accessibilityIdentifier("layoutPicker")
         }
 

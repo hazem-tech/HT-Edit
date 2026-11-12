@@ -29,7 +29,7 @@ final class ReadmeScreenshots: XCTestCase {
     }
 
     /// Two landscape clips on one timeline: the clip sidebar, the clip-boundary
-    /// line, the removed (grayed-out) parts and the live settings.
+    /// line, the removed (dimmed) parts and the live settings.
     @MainActor
     func testLandscapeTimeline() throws {
         let app = launchAndWaitForAnalysis(fixtures: "h264Landscape,h264Landscape", clips: 2)

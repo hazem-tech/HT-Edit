@@ -258,6 +258,31 @@ final class HT_EditUITests: XCTestCase {
         expect(app.clipRows.count == 1, "Space must not touch the clip list", app)
     }
 
+    /// Space plays right after import, without clicking anything first: the
+    /// AI review's text field must not take the window's first focus.
+    @MainActor
+    func testSpaceWorksWithoutClickingFirst() throws {
+        let app = launchWithFixture("h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
+        let field = app.descendants(matching: .any).matching(identifier: "reviewPromptField").firstMatch
+        expect(field.waitForExistence(timeout: 10), "Review field not found", app)
+
+        let time = app.staticTexts["transportTime"]
+        expect(time.waitForExistence(timeout: 5), "Time label not found", app)
+        let playPause = app.buttons["playPauseButton"]
+        let shownTime = { (time.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? time.label }
+        let before = shownTime()
+        app.typeKey(" ", modifierFlags: [])
+
+        let deadline = Date().addingTimeInterval(5)
+        var started = false
+        while !started, Date() < deadline {
+            started = playPause.label == "Pause" || shownTime() != before
+            if !started { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        expect(started, "Space didn't start playback (time stayed \(before)): something took the keyboard", app)
+    }
+
     // MARK: Helpers
 
     /// The first transcript line, once it's there. The transcript sits below

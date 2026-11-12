@@ -81,7 +81,7 @@ struct TranscriptSections: View {
                         .foregroundStyle(.secondary)
                 } else {
                     editControls
-                    TranscriptRows(model: model, segments: segments)
+                    TranscriptRows(model: model, segments: segments, lines: TranscriptRows.lines(of: segments, model: model))
                 }
             } header: {
                 HStack {
@@ -177,8 +177,35 @@ struct TranscriptSections: View {
 /// each tick it finds the active line and word, and only rows whose inputs
 /// changed are drawn again.
 private struct TranscriptRows: View {
+    /// A line as shown: which segment, and its time. Worked out where the
+    /// playhead isn't read, so playback doesn't redo it 30 times a second.
+    struct Line: Identifiable {
+        /// The segment's id, so rows keep their identity as lines come and go.
+        var id: String
+        var index: Int
+        var start: Double
+        var shownStart: Double
+    }
+
     let model: EditorViewModel
     let segments: [TimelineSegment]
+    let lines: [Line]
+
+    /// The lines to show: all of them, or in Clean the ones with words left,
+    /// timed by their first kept word.
+    static func lines(of segments: [TimelineSegment], model: EditorViewModel) -> [Line] {
+        guard model.hidesRemoved else {
+            return segments.indices.map { Line(id: segments[$0].id, index: $0, start: segments[$0].start, shownStart: segments[$0].start) }
+        }
+        let deleted = model.deletedWordIDs
+        return segments.indices.compactMap { index in
+            let segment = segments[index]
+            let first = segment.words.first { !deleted.contains($0.id) }
+            guard segment.words.isEmpty || first != nil else { return nil }
+            let start = first?.start ?? segment.start
+            return Line(id: segment.id, index: index, start: start, shownStart: model.displaySeconds(forSource: start))
+        }
+    }
 
     var body: some View {
         let time = model.currentTime.seconds
@@ -190,14 +217,11 @@ private struct TranscriptRows: View {
         let selection = model.selectedWordIDs
         let deleted = model.deletedWordIDs
         let highlights = model.review.reasons
-        // Clean leaves cut words out, and lines with nothing left.
         let hidesDeleted = model.hidesRemoved
-        let shown = Array(segments.enumerated()).filter { entry in
-            !hidesDeleted || entry.element.words.isEmpty || !entry.element.words.allSatisfy { deleted.contains($0.id) }
-        }
-        ForEach(shown, id: \.element.id) { index, segment in
+        ForEach(lines) { line in
+            let index = line.index
+            let segment = segments[index]
             let isActive = index == activeIndex
-            let start = hidesDeleted ? (segment.words.first { !deleted.contains($0.id) }?.start ?? segment.start) : segment.start
             TranscriptRow(
                 model: model,
                 state: TranscriptRow.RowState(
@@ -209,8 +233,8 @@ private struct TranscriptRows: View {
                     deleted: deleted,
                     highlights: highlights,
                     hidesDeleted: hidesDeleted,
-                    start: start,
-                    shownStart: model.displaySeconds(forSource: start)
+                    start: line.start,
+                    shownStart: line.shownStart
                 )
             )
             .equatable()
@@ -282,7 +306,7 @@ private struct TranscriptRow: View, Equatable {
                     return .handled
                 })
         }
-        .help(tooltip ?? "")
+        .modifier(HighlightHover(reasons: tooltip))
     }
 
     /// A click anywhere on the line. Both it and a word's link see a click on
@@ -380,12 +404,62 @@ private struct TranscriptRow: View, Equatable {
     }
 }
 
+/// Shows why a line's words are highlighted, in a small card under the line,
+/// as soon as the pointer rests on it. Lines without highlights get nothing,
+/// not even hover tracking, so the list scrolls as lightly as before.
+private struct HighlightHover: ViewModifier {
+    let reasons: String?
+
+    func body(content: Content) -> some View {
+        if let reasons {
+            content.modifier(HoverCard(text: reasons))
+        } else {
+            content
+        }
+    }
+}
+
+private struct HoverCard: ViewModifier {
+    let text: String
+    @State private var isShown = false
+    @State private var pending: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                pending?.cancel()
+                if inside {
+                    pending = Task {
+                        try? await Task.sleep(for: .milliseconds(150))
+                        guard !Task.isCancelled else { return }
+                        isShown = true
+                    }
+                } else {
+                    isShown = false
+                }
+            }
+            // A popover, not an overlay: list rows can't draw over their neighbors.
+            .popover(isPresented: $isShown, arrowEdge: .bottom) {
+                Text(text)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 280, alignment: .leading)
+                    .padding(10)
+                    .accessibilityIdentifier("highlightReason")
+            }
+    }
+}
+
 /// The AI review: a question about the transcript, typed or picked from the
 /// presets. The answer highlights words; nothing is cut until they're deleted.
 private struct ReviewControls: View {
     let model: EditorViewModel
     @Bindable var review: TranscriptReview
     let hasTranscript: Bool
+    /// The field only has focus while it's clicked into: it would otherwise
+    /// take the window's first focus, and Space, M and ⌫ go to whatever's
+    /// being typed into.
+    @FocusState private var isPromptFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -393,11 +467,15 @@ private struct ReviewControls: View {
                 TextField("Ask", text: $review.prompt, prompt: Text("Ask about the transcript…"))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
+                    .focused($isPromptFocused)
                     .onSubmit(run)
+                    .onExitCommand { isPromptFocused = false }
+                    .onAppear { isPromptFocused = false }
                     .accessibilityIdentifier("reviewPromptField")
                 Menu {
                     ForEach(ReviewPreset.allCases) { preset in
                         Button(preset.title) {
+                            isPromptFocused = false
                             review.prompt = preset.title
                             model.runReview(preset.instruction)
                         }
@@ -459,6 +537,7 @@ private struct ReviewControls: View {
     }
 
     private func run() {
+        isPromptFocused = false
         guard canRun else { return }
         model.runReview(ReviewPreset.instruction(for: review.prompt))
     }

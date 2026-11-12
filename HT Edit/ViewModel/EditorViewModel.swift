@@ -9,7 +9,7 @@ import Observation
 
 /// How the editor shows what's been removed.
 enum EditorLayout: String, CaseIterable, Identifiable {
-    /// Everything, with removed parts grayed out and cut words struck through.
+    /// Everything, with removed parts dimmed and cut words struck through.
     case full
     /// Only what's kept: removed parts are left out of the timeline, and cut
     /// words out of the transcript.
@@ -100,7 +100,7 @@ final class EditorViewModel {
     /// space selects the line, unless it was really on a word.
     @ObservationIgnored var lastWordClick: ContinuousClock.Instant?
 
-    /// Full shows removed parts grayed out; Clean leaves them out.
+    /// Full shows removed parts dimmed; Clean leaves them out.
     var layout = EditorLayout.full {
         didSet {
             guard layout != oldValue, layout == .clean else { return }

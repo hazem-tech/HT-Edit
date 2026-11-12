@@ -114,7 +114,8 @@ struct EditorKeyMonitor: NSViewRepresentable {
         private func handle(_ event: NSEvent) -> Bool {
             guard !event.isARepeat,
                   let window = view?.window,
-                  event.window === window,
+                  // The window itself, or a popover over it (a highlight's reason).
+                  event.window === window || event.window?.parent === window,
                   window.attachedSheet == nil,
                   NSApp.modalWindow == nil else { return false }
             let responder = window.firstResponder
