@@ -18,6 +18,10 @@ import SwiftUI
 /// horizontal `ScrollView` reports its content width when a stack measures it
 /// with an unbounded proposal, which caused a re-layout loop.)
 ///
+/// Layout: in Clean, the timeline shows edited time (only what's kept, back
+/// to back). The playhead and seeking go through the model's
+/// `displaySeconds(forSource:)` / `sourceSeconds(forDisplay:)`.
+///
 /// Scroll offset: only the scroll view's own geometry writes `scrollOffset`.
 /// The zoom bar never writes it and never asks for a scroll position the
 /// content can't reach yet: it changes the zoom, waits for the content's new
@@ -46,9 +50,16 @@ struct WaveformTimelineView: View {
 
     static let zoomRange: ClosedRange<Double> = TimelineZoom.range
 
+    /// Length of the timeline as shown (the edit, in Clean).
     private var durationSeconds: Double {
-        let seconds = model.timelineDuration.seconds
+        let seconds = model.displayDuration
         return seconds.isFinite && seconds > 0 ? seconds : 1
+    }
+
+    /// The playhead's position on the timeline as shown.
+    private var playheadSeconds: Double {
+        let seconds = model.currentTime.seconds
+        return seconds.isFinite ? model.displaySeconds(forSource: seconds) : 0
     }
 
     private func contentWidth(visible width: CGFloat) -> CGFloat {
@@ -92,7 +103,9 @@ struct WaveformTimelineView: View {
     private func timeline(visibleWidth width: CGFloat) -> some View {
         let scale = pixelsPerSecond(visible: width)
         let offset = shownOffset(visible: width)
-        let removed = model.removedRanges
+        // Clean leaves removed parts out: nothing to gray out or hover.
+        let hidesRemoved = model.hidesRemoved
+        let removed = hidesRemoved ? [] : model.removedRanges
         let shownPart = hover.shown.flatMap { removed.indices.contains($0) ? $0 : nil }
         return ScrollView(.horizontal) {
             Color.clear
@@ -101,7 +114,7 @@ struct WaveformTimelineView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            model.seek(toSeconds: Double(value.location.x / scale))
+                            model.seek(toSeconds: model.sourceSeconds(forDisplay: Double(value.location.x / scale)))
                         }
                 )
                 .onContinuousHover(coordinateSpace: .local) { phase in
@@ -146,6 +159,7 @@ struct WaveformTimelineView: View {
                 markerTimes: model.markerTimes,
                 hoveredRemoval: shownPart,
                 thresholdDB: model.settings.thresholdDB,
+                editMap: hidesRemoved ? model.editMap : nil,
                 offset: offset,
                 pixelsPerSecond: scale
             )
@@ -200,6 +214,25 @@ struct WaveformTimelineView: View {
         .onChange(of: removed) {
             dismissHover()
         }
+        .onChange(of: model.layout) { old, _ in
+            layoutDidSwitch(from: old)
+        }
+    }
+
+    /// Full ↔ Clean: the playhead keeps its place on screen. The content width
+    /// depends only on the zoom, so the new offset is always reachable.
+    private func layoutDidSwitch(from old: EditorLayout) {
+        dismissHover()
+        awaitingAnchor = nil
+        guard visibleWidth > 0 else { return }
+        let source = model.currentTime.seconds.isFinite ? model.currentTime.seconds : 0
+        let oldTime = old == .clean ? model.editMap.edited(fromSource: source) : source
+        let oldDuration = old == .clean ? model.editMap.editedDuration : model.timelineDuration.seconds
+        let content = contentWidth(visible: visibleWidth)
+        let oldScale = oldDuration.isFinite && oldDuration > 0 ? content / CGFloat(oldDuration) : 0
+        var x = CGFloat(oldTime) * oldScale - scrollOffset
+        if !(x.isFinite && x >= 0 && x <= visibleWidth) { x = visibleWidth / 2 }
+        scroll(to: ZoomAnchor(time: playheadSeconds, x: x), contentWidth: content, viewportWidth: visibleWidth)
     }
 
     // MARK: Zoom bar
@@ -262,7 +295,7 @@ struct WaveformTimelineView: View {
         let width = max(visibleWidth, 1)
         let scale = pixelsPerSecond(visible: width)
         let offset = shownOffset(visible: width)
-        let playhead = model.currentTime.seconds
+        let playhead = playheadSeconds
         if playhead.isFinite {
             let x = CGFloat(playhead) * scale - offset
             if x >= 0, x <= width { return ZoomAnchor(time: playhead, x: x) }
@@ -319,7 +352,7 @@ struct WaveformTimelineView: View {
     private func setZoom(_ newZoom: Double) {
         let clamped = min(Self.zoomRange.upperBound, max(Self.zoomRange.lowerBound, newZoom))
         guard clamped != zoom else { return }
-        let playhead = model.currentTime.seconds.isFinite ? model.currentTime.seconds : 0
+        let playhead = playheadSeconds
         let screenX = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - scrollOffset
         zoom = clamped
         let newOffset = CGFloat(playhead) * pixelsPerSecond(visible: visibleWidth) - screenX
@@ -450,7 +483,8 @@ private struct PlayheadOverlay: View {
         let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
         #endif
         let seconds = model.currentTime.seconds
-        let x = (seconds.isFinite ? CGFloat(seconds) : 0) * pixelsPerSecond - offset
+        let shown = seconds.isFinite ? model.displaySeconds(forSource: seconds) : 0
+        let x = CGFloat(shown) * pixelsPerSecond - offset
         Rectangle()
             .fill(.white)
             .shadow(color: .black.opacity(0.4), radius: 1)
@@ -467,9 +501,10 @@ private struct PlayheadOverlay: View {
     /// playback, unless the user scrolled away (until playback starts again).
     private func followPlayhead(_ time: CMTime) {
         guard model.followsPlayhead, model.isPlaying, viewportWidth > 0, time.seconds.isFinite else { return }
-        let x = CGFloat(time.seconds) * pixelsPerSecond - offset
+        let shown = CGFloat(model.displaySeconds(forSource: time.seconds))
+        let x = shown * pixelsPerSecond - offset
         if x > viewportWidth * 0.95 || x < 0 {
-            scrollPosition.scrollTo(x: max(0, CGFloat(time.seconds) * pixelsPerSecond - viewportWidth * 0.05))
+            scrollPosition.scrollTo(x: max(0, shown * pixelsPerSecond - viewportWidth * 0.05))
         }
     }
 }

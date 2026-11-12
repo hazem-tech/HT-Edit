@@ -7,6 +7,24 @@ import AVFoundation
 import os
 import Observation
 
+/// How the editor shows what's been removed.
+enum EditorLayout: String, CaseIterable, Identifiable {
+    /// Everything, with removed parts grayed out and cut words struck through.
+    case full
+    /// Only what's kept: removed parts are left out of the timeline, and cut
+    /// words out of the transcript.
+    case clean
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .full: "Full"
+        case .clean: "Clean"
+        }
+    }
+}
+
 /// Where the player is in getting the current timeline ready.
 enum PlaybackStatus: Equatable {
     case idle
@@ -37,6 +55,8 @@ final class EditorViewModel {
     let player: AVPlayer
     /// Transcripts of the clips on the timeline.
     let transcription: TranscriptionController
+    /// Questions asked about the transcript, and the words they highlight.
+    let review: TranscriptReview
     private(set) var clips: [Clip] = []
     private(set) var currentTime: CMTime = .zero
     private(set) var silences: [CMTimeRange] = []
@@ -53,6 +73,8 @@ final class EditorViewModel {
     private(set) var removedRanges: [RemovedRange] = []
     /// What playback skips: `removedRanges` joined into whole stretches.
     private(set) var skipRanges: [CMTimeRange] = []
+    /// What's kept, back to back: maps the full timeline to the edit.
+    private(set) var editMap = EditMap.empty
     /// Transcript lines at their timeline positions.
     private(set) var timelineTranscript: [TimelineSegment] = []
     /// Every word of `timelineTranscript`, in order.
@@ -74,6 +96,18 @@ final class EditorViewModel {
     var errorMessage: String?
     /// The clip list has keyboard focus: Delete removes clips there, not words.
     @ObservationIgnored var isClipListFocused = false
+    /// When a transcript word was last clicked: a click on a line's empty
+    /// space selects the line, unless it was really on a word.
+    @ObservationIgnored var lastWordClick: ContinuousClock.Instant?
+
+    /// Full shows removed parts grayed out; Clean leaves them out.
+    var layout = EditorLayout.full {
+        didSet {
+            guard layout != oldValue, layout == .clean else { return }
+            // Cut words are hidden now: they can't stay selected.
+            if !selectedWordIDs.isDisjoint(with: deletedWordIDs) { selectedWordIDs.subtract(deletedWordIDs) }
+        }
+    }
 
     var settings = SilenceSettings.default {
         didSet {
@@ -125,6 +159,24 @@ final class EditorViewModel {
 
     var totalSilenceDuration: CMTime { SilenceDetector.totalDuration(of: silences) }
 
+    /// Whether removed parts are left out of the timeline and transcript.
+    var hidesRemoved: Bool { layout == .clean }
+
+    /// Length of the timeline as shown: the whole timeline, or the edit in Clean.
+    var displayDuration: Double {
+        hidesRemoved ? editMap.editedDuration : timelineDuration.seconds
+    }
+
+    /// Where full-timeline `seconds` is shown on the timeline.
+    func displaySeconds(forSource seconds: Double) -> Double {
+        hidesRemoved ? editMap.edited(fromSource: seconds) : seconds
+    }
+
+    /// The full-timeline time shown at `seconds` on the timeline.
+    func sourceSeconds(forDisplay seconds: Double) -> Double {
+        hidesRemoved ? editMap.source(fromEdited: seconds) : seconds
+    }
+
     // MARK: Private state
 
     private let analyzer: AudioLevelAnalyzer
@@ -156,9 +208,14 @@ final class EditorViewModel {
     private static let levelsPublishInterval: Duration = .milliseconds(50)
     private static let playerReadyTimeout: Duration = .seconds(15)
 
-    init(analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(), transcription: TranscriptionController = .live()) {
+    init(
+        analyzer: AudioLevelAnalyzer = AudioLevelAnalyzer(),
+        transcription: TranscriptionController = .live(),
+        review: TranscriptReview = .live()
+    ) {
         self.analyzer = analyzer
         self.transcription = transcription
+        self.review = review
         self.player = AVPlayer()
         configurePlayer()
         connectTranscription()
@@ -168,10 +225,12 @@ final class EditorViewModel {
     init(
         analyzedClips: [(clip: Clip, levels: AudioLevels)],
         settings: SilenceSettings = .default,
-        transcription: TranscriptionController = TranscriptionController(engine: AgyEngine(), cache: nil, defaults: nil)
+        transcription: TranscriptionController = TranscriptionController(engine: AgyEngine(), cache: nil, defaults: nil),
+        review: TranscriptReview = TranscriptReview(engine: AgyEngine())
     ) {
         self.analyzer = AudioLevelAnalyzer(cache: nil)
         self.transcription = transcription
+        self.review = review
         self.player = AVPlayer()
         self.clips = analyzedClips.map { entry in
             var clip = entry.clip
@@ -228,6 +287,7 @@ final class EditorViewModel {
         deletedWordIDs = deletedWordIDs.filter { id in !removedPrefixes.contains { id.hasPrefix($0) } }
         selectedWordIDs = selectedWordIDs.filter { id in !removedPrefixes.contains { id.hasPrefix($0) } }
         selectionAnchor = nil
+        review.forgetWords { id in removedPrefixes.contains { id.hasPrefix($0) } }
         transcription.remove(ids)
         levelsRevision += 1
         layoutDidChange()
@@ -323,6 +383,7 @@ final class EditorViewModel {
         deletedWordIDs = []
         selectedWordIDs = []
         selectionAnchor = nil
+        review.clear()
         transcription.transcribe(placedClips)
         recomputeSkips()
     }
@@ -340,7 +401,7 @@ final class EditorViewModel {
         guard words.indices.contains(index) else { return }
         let id = words[index].id
         if extending, let anchor = selectionAnchor, words.indices.contains(anchor) {
-            selectedWordIDs = Set(words[min(anchor, index)...max(anchor, index)].map(\.id))
+            selectedWordIDs = visibleIDs(words[min(anchor, index)...max(anchor, index)])
         } else if toggling {
             if selectedWordIDs.contains(id) { selectedWordIDs.remove(id) } else { selectedWordIDs.insert(id) }
             selectionAnchor = index
@@ -349,6 +410,37 @@ final class EditorViewModel {
             selectionAnchor = index
             seek(toSeconds: words[index].start)
         }
+    }
+
+    /// Selects every word of the line `segmentID` (a click on the line's empty
+    /// space), so ⌫ cuts the whole line. Doesn't move the playhead.
+    func selectWords(inSegment segmentID: String) {
+        guard let segment = timelineTranscript.first(where: { $0.id == segmentID }), !segment.words.isEmpty else { return }
+        let ids = visibleIDs(segment.words[...])
+        guard !ids.isEmpty else { return }
+        selectedWordIDs = ids
+        selectionAnchor = timelineWords.firstIndex { ids.contains($0.id) }
+    }
+
+    /// Selects every word the transcript review highlighted, so ⌫ cuts them all.
+    func selectHighlightedWords() {
+        let highlighted = review.reasons
+        let ids = visibleIDs(timelineWords.filter { highlighted[$0.id] != nil }[...])
+        guard !ids.isEmpty else { return }
+        selectedWordIDs = ids
+        selectionAnchor = timelineWords.firstIndex { ids.contains($0.id) }
+    }
+
+    /// Asks the transcript review `instruction` about the words that are kept.
+    func runReview(_ instruction: String) {
+        review.run(instruction, segments: timelineTranscript, deleted: deletedWordIDs, model: transcription.selectedModel.id)
+    }
+
+    /// The ids of `words` that are shown: in Clean, cut words are hidden.
+    private func visibleIDs(_ words: ArraySlice<TimelineWord>) -> Set<String> {
+        var ids = Set(words.map(\.id))
+        if hidesRemoved { ids.subtract(deletedWordIDs) }
+        return ids
     }
 
     /// Cuts the selected words, or restores them if they're all cut already (⌫).
@@ -371,6 +463,30 @@ final class EditorViewModel {
     func restoreAllWords() {
         deletedWordIDs = []
         recomputeSkips()
+    }
+
+    // MARK: Export
+
+    /// The edit as Final Cut Pro XML: every placed clip, with the pieces of it
+    /// that are kept (and its markers), referencing the original files.
+    func makeFCPXML() async throws -> String {
+        let placed = placedClips
+        let pieces = EditDecisions.keptPieces(
+            clipDurations: placed.map(\.duration.seconds),
+            map: editMap,
+            markers: placed.map { clip in markers.filter { $0.clipID == clip.id }.map(\.clipTime) }
+        )
+        let sources = zip(placed, pieces).map { clip, pieces in
+            (url: clip.url, name: clip.name, duration: clip.duration.seconds, pieces: pieces)
+        }
+        return try await FCPXMLExporter.document(projectName: exportName, sources: sources)
+    }
+
+    /// The exported project's name: the first clip's, without its extension.
+    var exportName: String {
+        guard let first = placedClips.first else { return "HT Edit" }
+        let base = first.url.deletingPathExtension().lastPathComponent
+        return "\(base.isEmpty ? first.name : base) Edit"
     }
 
     // MARK: Transport
@@ -621,6 +737,8 @@ final class EditorViewModel {
         removedRanges = RemovalPlanner.parts(tagged)
         // Playback seeks once across a whole stretch, whatever its parts.
         skipRanges = ClipTimeline.merged(removedRanges.map(\.range))
+        let map = EditMap(skips: skipRanges, duration: timelineDuration.seconds)
+        if map != editMap { editMap = map }
         installBoundaryObserver()
     }
 

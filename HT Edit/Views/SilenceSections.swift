@@ -1,19 +1,20 @@
 //
-//  SilenceSettingsPanel.swift
+//  SilenceSections.swift
 //  HT Edit
 //
 
 import SwiftUI
 
-/// Inspector with the live silence-detection controls.
-struct SilenceSettingsPanel: View {
+/// The live silence-detection controls: the top of the inspector, above the
+/// transcript. Sections only; the inspector's `Form` holds them.
+struct SilenceSections: View {
     @Bindable var model: EditorViewModel
 
     var body: some View {
         #if DEBUG
         let _ = BodyTrace.isEnabled ? Self._printChanges() : ()
         #endif
-        Form {
+        Group {
             Section("Detection") {
                 SettingSlider(
                     "Threshold",
@@ -26,21 +27,23 @@ struct SilenceSettingsPanel: View {
             }
 
             Section("Padding") {
+                // Named from the speech's side: "start" is kept before speech
+                // starts (the end of a silence), "end" after it ends.
                 SettingSlider(
                     "Padding start",
-                    value: $model.settings.paddingStart,
+                    value: $model.settings.paddingEnd,
                     in: SilenceSettings.paddingRange,
                     step: 0.01,
-                    help: "Audio kept after speech ends, at the start of each silence."
+                    help: "Audio kept before speech starts, at the end of each silence."
                 ) { Self.milliseconds($0) }
                 .accessibilityIdentifier("paddingStartSlider")
 
                 SettingSlider(
                     "Padding end",
-                    value: $model.settings.paddingEnd,
+                    value: $model.settings.paddingStart,
                     in: SilenceSettings.paddingRange,
                     step: 0.01,
-                    help: "Audio kept before speech resumes, at the end of each silence."
+                    help: "Audio kept after speech ends, at the start of each silence."
                 ) { Self.milliseconds($0) }
                 .accessibilityIdentifier("paddingEndSlider")
             }
@@ -51,7 +54,6 @@ struct SilenceSettingsPanel: View {
                     .accessibilityIdentifier("cutNonSpeechToggle")
             }
         }
-        .formStyle(.grouped)
         .monospacedDigit()
     }
 

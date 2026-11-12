@@ -135,18 +135,19 @@ final class HT_EditUITests: XCTestCase {
 
     /// With the fake transcriber (no Google sign-in needed): importing fills in
     /// the transcript by itself, with the cheapest model. There's no Transcribe
-    /// button and no context field, and Retry only shows after a failure.
+    /// button and no context field, and Retry only shows after a failure. The
+    /// transcript sits below the silence settings, in the same inspector.
     @MainActor
     func testTranscriptionStartsAutomatically() throws {
         let app = launchWithFixture("h264Landscape")
         expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
 
-        let tab = [app.radioButtons["Transcript"], app.buttons["Transcript"]].first { $0.waitForExistence(timeout: 2) }
-        expect(tab != nil, "Transcript tab not found", app)
-        tab?.click()
+        expect(!app.radioButtons["Transcript"].exists && !app.buttons["Transcript"].exists, "There should be no inspector tabs", app)
+        let speechToggle = app.descendants(matching: .any).matching(identifier: "cutNonSpeechToggle").firstMatch
+        expect(speechToggle.waitForExistence(timeout: 5), "Silence settings should be in the inspector", app)
 
-        let line = app.descendants(matching: .any).matching(identifier: "transcriptRow").firstMatch
-        expect(line.waitForExistence(timeout: 20), "No transcript rows after importing", app)
+        let line = transcriptRow(in: app)
+        expect(line.exists, "No transcript rows after importing", app)
 
         let picker = app.descendants(matching: .any).matching(identifier: "transcriptModelPicker").firstMatch
         expect(picker.waitForExistence(timeout: 5), "Model picker not found", app)
@@ -156,6 +157,39 @@ final class HT_EditUITests: XCTestCase {
         expect(!app.buttons["transcribeButton"].exists, "There should be no Transcribe button", app)
         expect(!app.descendants(matching: .any).matching(identifier: "transcriptContextField").firstMatch.exists, "There should be no context field", app)
         expect(!app.buttons["transcriptRetryButton"].exists, "Retry should only show after a failure", app)
+        add(XCTAttachment(screenshot: app.screenshot()))
+    }
+
+    /// A preset question highlights words (the fake review picks the first
+    /// one), Select selects them, and the toolbar has Full/Clean and Export.
+    @MainActor
+    func testReviewPresetHighlightsWordsAndLayoutSwitches() throws {
+        let app = launchWithFixture("h264Landscape")
+        expect(app.timeline.waitForExistence(timeout: 20), "Timeline didn't appear", app)
+        expect(transcriptRow(in: app).exists, "No transcript rows after importing", app)
+
+        let presets = app.descendants(matching: .any).matching(identifier: "reviewPresetsMenu").firstMatch
+        expect(presets.waitForExistence(timeout: 5), "Presets menu not found", app)
+        presets.click()
+        let item = app.menuItems["Find repetition"]
+        expect(item.waitForExistence(timeout: 3), "Preset menu item not found", app)
+        item.click()
+
+        let summary = app.staticTexts["reviewSummary"]
+        expect(summary.waitForExistence(timeout: 10), "The review didn't answer", app)
+        let summaryText = (summary.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? summary.label
+        expect(summaryText.contains("1 highlight"), "Expected one highlight, shows \(summaryText)", app)
+        app.buttons["reviewSelectButton"].click()
+        let deleteButton = app.buttons["deleteWordsButton"]
+        expect(deleteButton.waitForExistence(timeout: 3) && deleteButton.isEnabled, "Select should select the highlighted words", app)
+
+        let layout = app.descendants(matching: .any).matching(identifier: "layoutPicker").firstMatch
+        expect(layout.waitForExistence(timeout: 5), "Layout switch not found", app)
+        let clean = [app.radioButtons["Clean"], app.buttons["Clean"]].first { $0.exists }
+        expect(clean != nil, "Clean option not found", app)
+        clean?.click()
+        expect(app.timeline.exists, "Timeline is gone in Clean", app)
+        expect(app.buttons["exportButton"].isEnabled, "Export should be enabled with a clip", app)
         add(XCTAttachment(screenshot: app.screenshot()))
     }
 
@@ -225,6 +259,20 @@ final class HT_EditUITests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// The first transcript line, once it's there. The transcript sits below
+    /// the silence settings, so scroll the inspector down if it's out of view.
+    @MainActor
+    private func transcriptRow(in app: XCUIApplication) -> XCUIElement {
+        let line = app.descendants(matching: .any).matching(identifier: "transcriptRow").firstMatch
+        if line.waitForExistence(timeout: 20) { return line }
+        let settings = app.descendants(matching: .any).matching(identifier: "cutNonSpeechToggle").firstMatch
+        if settings.exists {
+            settings.scroll(byDeltaX: 0, deltaY: -1500)
+        }
+        _ = line.waitForExistence(timeout: 10)
+        return line
+    }
 
     /// Asserts, and on failure prints the app's accessibility tree into the test log
     /// so CI shows what was on screen (alerts, missing views, wrong state).

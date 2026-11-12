@@ -27,6 +27,23 @@ nonisolated protocol TranscriptionEngine: Sendable {
     func transcribe(audio: URL, duration: Double, model: String, context: String) async throws -> [TranscriptSegment]
 }
 
+/// A passage of the transcript the review points at: words `first...last`,
+/// numbered as in the transcript it was sent (`TranscriptReview.document`).
+nonisolated struct ReviewFinding: Equatable, Sendable {
+    var first: Int
+    var last: Int
+    var reason: String
+}
+
+/// Answers a question about a transcript ("find repetition", "pick the worst
+/// parts"…) by pointing at its words.
+nonisolated protocol TranscriptReviewEngine: Sendable {
+    /// - Parameters:
+    ///   - transcript: the transcript, each word written `#N:word` (see `TranscriptReview.document`).
+    ///   - instruction: what the user asked.
+    func review(transcript: String, instruction: String, model: String) async throws -> [ReviewFinding]
+}
+
 nonisolated enum AgyError: LocalizedError, Equatable {
     case notInstalled
     case notSignedIn
@@ -89,6 +106,32 @@ nonisolated enum AgyCommand {
         ]
     }
 
+    /// JSON Schema for a transcript review's answer.
+    static let reviewSchema = #"{"type":"object","properties":{"highlights":{"type":"array","items":{"type":"object","properties":{"first":{"type":"integer"},"last":{"type":"integer"},"reason":{"type":"string"}},"required":["first","last","reason"]}}},"required":["highlights"]}"#
+
+    /// Headless review of the transcript in `fileName`, which must be in the working directory.
+    static func review(fileName: String, instruction: String, model: String, timeout: Duration) -> [String] {
+        [
+            "-p", reviewPrompt(fileName: fileName, instruction: instruction),
+            "--output-format", "json",
+            "--json-schema", reviewSchema,
+            "--model", model,
+            "--print-timeout", "\(Int(timeout.components.seconds))s",
+        ]
+    }
+
+    static func reviewPrompt(fileName: String, instruction: String) -> String {
+        [
+            "The file @\(fileName) is the transcript of a video, one spoken line per row, with the time it starts in brackets.",
+            "Every word is written as #N:word, where N is the word's number.",
+            "Task from the user: \(instruction.trimmingCharacters(in: .whitespacesAndNewlines))",
+            "Answer by pointing at the passages the task is about. For each one, give the number of its first and last word, and a short reason (one sentence) saying why it was picked.",
+            "Only use word numbers that are in the file. If nothing matches, return an empty list.",
+            "Only read that file: don't run commands or change any files.",
+            #"Reply only with JSON of the form {"highlights":[{"first":12,"last":15,"reason":"..."}]}."#,
+        ].joined(separator: "\n")
+    }
+
     static func prompt(fileName: String, duration: Double, context: String) -> String {
         var lines = [
             "Transcribe the speech in the audio file @\(fileName) verbatim, in the language that is spoken.",
@@ -113,16 +156,45 @@ nonisolated enum AgyCommand {
 /// in plain text (with or without a code fence) when structured output isn't used.
 nonisolated enum AgyOutputParser {
     static func segments(from stdout: String) throws -> [TranscriptSegment] {
+        try reply(SegmentList.self, from: stdout, structured: { $0.segments }, text: { try segments(fromText: $0) })
+    }
+
+    /// The passages a transcript review points at.
+    static func findings(from stdout: String) throws -> [ReviewFinding] {
+        try reply(FindingList.self, from: stdout, structured: { $0.highlights }, text: { try findings(fromText: $0) })
+    }
+
+    /// Reads `agy --output-format json` output: the structured output if
+    /// there is one, otherwise the model's text reply (or the whole output).
+    private static func reply<Output: Decodable, Result>(
+        _ type: Output.Type,
+        from stdout: String,
+        structured: (Output) -> Result,
+        text: (String) throws -> Result
+    ) throws -> Result {
         let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(trimmed.utf8)) {
+        if let envelope = try? JSONDecoder().decode(Envelope<Output>.self, from: Data(trimmed.utf8)) {
             if let status = envelope.status, status.uppercased() != "SUCCESS" {
                 let reason = envelope.error ?? envelope.response ?? status
                 throw AgyError.looksLikeSignInProblem(reason) ? AgyError.notSignedIn : AgyError.failed(reason)
             }
-            if let structured = envelope.structuredOutput { return structured.segments }
-            if let response = envelope.response { return try segments(fromText: response) }
+            if let output = envelope.structuredOutput { return structured(output) }
+            if let response = envelope.response { return try text(response) }
         }
-        return try segments(fromText: trimmed)
+        return try text(trimmed)
+    }
+
+    /// Finds the JSON in a review reply: `{"highlights": [...]}` or a bare `[...]`.
+    static func findings(fromText text: String) throws -> [ReviewFinding] {
+        let decoder = JSONDecoder()
+        for opener in ["{", "["] {
+            guard let start = text.firstIndex(of: Character(opener)),
+                  let end = text.lastIndex(of: opener == "{" ? "}" : "]"), start < end else { continue }
+            let data = Data(text[start...end].utf8)
+            if let list = try? decoder.decode(FindingList.self, from: data) { return list.highlights }
+            if let array = try? decoder.decode([RawFinding].self, from: data) { return array.map(\.finding) }
+        }
+        throw AgyError.invalidOutput(String(text.prefix(200)))
     }
 
     /// Finds the JSON in a model reply: `{"segments": [...]}` or a bare `[...]`.
@@ -138,11 +210,11 @@ nonisolated enum AgyOutputParser {
         throw AgyError.invalidOutput(String(text.prefix(200)))
     }
 
-    private struct Envelope: Decodable {
+    private struct Envelope<Output: Decodable>: Decodable {
         var status: String?
         var response: String?
         var error: String?
-        var structuredOutput: SegmentList?
+        var structuredOutput: Output?
 
         enum CodingKeys: String, CodingKey {
             case status, response, error
@@ -154,7 +226,7 @@ nonisolated enum AgyOutputParser {
             status = try? container.decode(String.self, forKey: .status)
             response = try? container.decode(String.self, forKey: .response)
             error = try? container.decode(String.self, forKey: .error)
-            structuredOutput = try? container.decode(SegmentList.self, forKey: .structuredOutput)
+            structuredOutput = try? container.decode(Output.self, forKey: .structuredOutput)
             guard status != nil || response != nil || structuredOutput != nil else {
                 throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Not an agy envelope"))
             }
@@ -169,6 +241,41 @@ nonisolated enum AgyOutputParser {
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             segments = try container.decode([RawSegment].self, forKey: .segments).map(\.segment)
+        }
+    }
+
+    private struct FindingList: Decodable {
+        var highlights: [ReviewFinding]
+
+        enum CodingKeys: String, CodingKey { case highlights }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            highlights = try container.decode([RawFinding].self, forKey: .highlights).map(\.finding)
+        }
+    }
+
+    /// A finding whose word numbers may be integers, decimals or strings.
+    private struct RawFinding: Decodable {
+        var finding: ReviewFinding
+
+        enum CodingKeys: String, CodingKey { case first, last, reason }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            func number(_ key: CodingKeys) throws -> Int {
+                if let value = try? container.decode(Int.self, forKey: key) { return value }
+                if let value = try? container.decode(Double.self, forKey: key), value.isFinite, abs(value) < 1e9 { return Int(value) }
+                let string = try container.decode(String.self, forKey: key)
+                guard let value = Int(string.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "#"))) else {
+                    throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "Bad word number \(string)")
+                }
+                return value
+            }
+            let first = try number(.first)
+            let last = (try? number(.last)) ?? first
+            let reason = (try? container.decode(String.self, forKey: .reason)) ?? ""
+            finding = ReviewFinding(first: first, last: last, reason: reason.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
@@ -214,7 +321,7 @@ nonisolated enum AgyOutputParser {
 // MARK: - Engine
 
 /// Runs the installed `agy`. Finding it is cached; everything else runs per call.
-actor AgyEngine: TranscriptionEngine {
+actor AgyEngine: TranscriptionEngine, TranscriptReviewEngine {
     private let fixedExecutable: URL?
     private let chunkTimeout: Duration
     private var located: URL?
@@ -262,6 +369,35 @@ actor AgyEngine: TranscriptionEngine {
         }
         guard output.status == 0 else { throw AgyError.from(output) }
         return try AgyOutputParser.segments(from: output.stdout)
+    }
+
+    // MARK: Reviewing a transcript
+
+    /// Runs the review in a folder of its own that holds only the transcript,
+    /// so `agy` has nothing else to read.
+    func review(transcript: String, instruction: String, model: String) async throws -> [ReviewFinding] {
+        guard let agy = await executable() else { throw AgyError.notInstalled }
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "htedit-review-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fileName = "transcript.txt"
+        try transcript.write(to: folder.appending(path: fileName, directoryHint: .notDirectory), atomically: true, encoding: .utf8)
+
+        let output: ProcessOutput
+        do {
+            output = try await ProcessRunner.run(
+                agy,
+                arguments: AgyCommand.review(fileName: fileName, instruction: instruction, model: model, timeout: chunkTimeout),
+                currentDirectory: folder,
+                environment: environment(for: agy),
+                timeout: chunkTimeout + .seconds(30)
+            )
+        } catch ProcessRunnerError.timedOut {
+            throw AgyError.timedOut
+        }
+        guard output.status == 0 else { throw AgyError.from(output) }
+        return try AgyOutputParser.findings(from: output.stdout)
     }
 
     // MARK: Locating agy

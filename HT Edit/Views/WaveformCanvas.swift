@@ -15,6 +15,9 @@ import SwiftUI
 /// edge that the timeline shows a hover card for. Parts are split wherever
 /// the reason changes, and each has its own bar.
 ///
+/// With an `editMap` (the Clean layout), the timeline is drawn in edited
+/// time: only the kept pieces, back to back, and nothing grayed out.
+///
 /// Inputs are plain values; SwiftUI only re-renders when they change, never
 /// on playhead movement (the playhead lives in its own overlay).
 struct WaveformCanvas: View {
@@ -26,6 +29,8 @@ struct WaveformCanvas: View {
     /// Index in `removed` whose top bar is hovered.
     var hoveredRemoval: Int? = nil
     let thresholdDB: Double
+    /// Set in the Clean layout: draw only the kept pieces, in edited time.
+    var editMap: EditMap? = nil
     /// Horizontal scroll offset of the visible slice, in points.
     let offset: CGFloat
     let pixelsPerSecond: CGFloat
@@ -61,8 +66,12 @@ struct WaveformCanvas: View {
             context.fill(removedPath, with: .color(.gray.opacity(0.12)))
 
             var peaks = Path()
-            for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
-                addWaveform(of: lane, wave: wave, visibleStart: visibleStart, peaks: &peaks)
+            if let editMap {
+                addKeptWaveform(editMap, wave: wave, visibleStart: visibleStart, visibleEnd: visibleEnd, peaks: &peaks)
+            } else {
+                for lane in lanes where lane.start + lane.duration >= visibleStart && lane.start <= visibleEnd {
+                    addWaveform(of: lane, from: lane.start, to: lane.start + lane.duration, shownAt: lane.start, wave: wave, visibleStart: visibleStart, peaks: &peaks)
+                }
             }
             if removedPath.isEmpty {
                 context.fill(peaks, with: .color(Self.waveColor))
@@ -92,6 +101,27 @@ struct WaveformCanvas: View {
         CGFloat(seconds - visibleStart) * pixelsPerSecond
     }
 
+    /// Where full-timeline `seconds` is drawn: as is, or in edited time.
+    private func shown(_ seconds: Double) -> Double {
+        editMap?.edited(fromSource: seconds) ?? seconds
+    }
+
+    /// The Clean layout: each visible kept piece, with the part of each clip it covers.
+    private func addKeptWaveform(_ map: EditMap, wave: CGRect, visibleStart: Double, visibleEnd: Double, peaks: inout Path) {
+        let pieces = map.pieces
+        for index in map.firstIndex(endingAfterEdited: visibleStart)..<pieces.count {
+            let piece = pieces[index]
+            if piece.editedStart > visibleEnd { break }
+            for lane in lanes {
+                let start = max(piece.source.lowerBound, lane.start)
+                let end = min(piece.source.upperBound, lane.start + lane.duration)
+                guard end > start else { continue }
+                let shownAt = piece.editedStart + (start - piece.source.lowerBound)
+                addWaveform(of: lane, from: start, to: end, shownAt: shownAt, wave: wave, visibleStart: visibleStart, peaks: &peaks)
+            }
+        }
+    }
+
     /// The visible removed parts over the wave area, their top bars, and the hovered bar.
     private func removedShapes(wave: CGRect, visibleStart: Double, visibleEnd: Double) -> (area: Path, bars: Path, hovered: Path) {
         var area = Path()
@@ -118,15 +148,24 @@ struct WaveformCanvas: View {
     }
 
     /// Samples one clip's own levels (each clip keeps its own sample rate) for
-    /// the columns it covers on screen, adding its bars to `peaks`.
+    /// full-timeline seconds `start..<end`, drawn from timeline position
+    /// `shownAt`, for the columns they cover on screen, adding its bars to `peaks`.
     ///
     /// Only the peak level is drawn: it's what word cuts are placed by (the
     /// quietest peak in a pause), so what you see is what cuts follow.
-    private func addWaveform(of lane: ClipLane, wave: CGRect, visibleStart: Double, peaks peakPath: inout Path) {
+    private func addWaveform(
+        of lane: ClipLane,
+        from start: Double,
+        to end: Double,
+        shownAt: Double,
+        wave: CGRect,
+        visibleStart: Double,
+        peaks peakPath: inout Path
+    ) {
         let levels = lane.levels
         guard levels.windowCount > 0, levels.windowSeconds > 0 else { return }
-        let laneMinX = max(0, xPosition(for: lane.start, visibleStart: visibleStart))
-        let laneMaxX = min(wave.width, xPosition(for: lane.start + lane.duration, visibleStart: visibleStart))
+        let laneMinX = max(0, xPosition(for: shownAt, visibleStart: visibleStart))
+        let laneMaxX = min(wave.width, xPosition(for: shownAt + (end - start), visibleStart: visibleStart))
         guard laneMinX.isFinite, laneMaxX.isFinite, laneMaxX > laneMinX else { return }
 
         let firstColumn = Int((laneMinX / Self.barStep).rounded(.down))
@@ -136,8 +175,10 @@ struct WaveformCanvas: View {
 
         let windowSeconds = levels.windowSeconds
         let windowsPerColumn = Double(Self.barStep / pixelsPerSecond) / windowSeconds
+        // The first column's position on screen, then the same moment in the clip.
         let columnStartTime = visibleStart + Double(CGFloat(firstColumn) * Self.barStep / pixelsPerSecond)
-        let startWindow = (columnStartTime - lane.start) / windowSeconds
+        let clipTime = columnStartTime - shownAt + (start - lane.start)
+        let startWindow = clipTime / windowSeconds
         guard windowsPerColumn.isFinite, startWindow.isFinite, abs(startWindow) < Double(Int.max / 4) else { return }
 
         let peaks = WaveformSampler.buckets(levels.peakDB, startWindow: startWindow, windowsPerBucket: windowsPerColumn, count: columns)
@@ -169,8 +210,10 @@ struct WaveformCanvas: View {
     /// A yellow line where each clip after the first begins.
     private func drawClipBoundaries(in context: inout GraphicsContext, height: CGFloat, visibleStart: Double, visibleEnd: Double) {
         var path = Path()
-        for lane in lanes.dropFirst() where lane.start >= visibleStart && lane.start <= visibleEnd {
-            let x = xPosition(for: lane.start, visibleStart: visibleStart)
+        for lane in lanes.dropFirst() {
+            let start = shown(lane.start)
+            guard start >= visibleStart, start <= visibleEnd else { continue }
+            let x = xPosition(for: start, visibleStart: visibleStart)
             path.addRect(CGRect(x: x - 1, y: 0, width: 2, height: height))
         }
         context.fill(path, with: .color(.yellow))
@@ -205,7 +248,7 @@ struct WaveformCanvas: View {
         guard !markerTimes.isEmpty else { return }
         var lines = Path()
         var flags = Path()
-        for time in markerTimes where time >= visibleStart && time <= visibleEnd {
+        for time in markerTimes.lazy.map({ shown($0) }) where time >= visibleStart && time <= visibleEnd {
             let x = xPosition(for: time, visibleStart: visibleStart)
             guard x.isFinite else { continue }
             lines.addRect(CGRect(x: x - 1, y: 0, width: 2, height: height))

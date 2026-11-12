@@ -1,5 +1,5 @@
 //
-//  TranscriptPanel.swift
+//  TranscriptSections.swift
 //  HT Edit
 //
 
@@ -7,15 +7,18 @@ import AppKit
 import CoreMedia
 import SwiftUI
 
-/// Inspector tab: the timestamped transcript, filled in automatically as
-/// soon as a clip is imported. Clicking a line's time jumps the player there.
-/// A Retry button appears only if transcription failed or was cancelled.
+/// The inspector below the silence settings: the timestamped transcript,
+/// filled in automatically as soon as a clip is imported, and the AI review.
+/// Clicking a line's time jumps the player there. A Retry button appears only
+/// if transcription failed or was cancelled. Sections only; the inspector's
+/// `Form` holds them.
 ///
 /// Every word can be selected and deleted: playback then skips it, cut at the
 /// quietest point of the pauses around it. Click a word to select it (and
-/// jump there), Shift-click to extend, Command-click to add or remove one.
-/// ⌫ cuts the selection, or restores it if it's all cut already.
-struct TranscriptPanel: View {
+/// jump there), Shift-click to extend, Command-click to add or remove one, or
+/// click a line's empty space to select the whole line. ⌫ cuts the
+/// selection, or restores it if it's all cut already.
+struct TranscriptSections: View {
     @Bindable var model: EditorViewModel
 
     private var controller: TranscriptionController { model.transcription }
@@ -26,7 +29,7 @@ struct TranscriptPanel: View {
         #endif
         // Nothing here reads the playhead: only `TranscriptRows` follows it.
         let segments = model.timelineTranscript
-        Form {
+        Group {
             if let banner = EngineBanner(status: controller.engineStatus) {
                 Section {
                     banner
@@ -64,6 +67,15 @@ struct TranscriptPanel: View {
             }
 
             Section {
+                ReviewControls(model: model, review: model.review, hasTranscript: !segments.isEmpty)
+            } header: {
+                Text("AI Review")
+            } footer: {
+                Text("Highlights words in red; rest the pointer on a line to see why. Nothing is cut until you delete words.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 if segments.isEmpty {
                     Text(controller.isRunning ? "Transcribing…" : "The transcript appears here automatically.")
                         .foregroundStyle(.secondary)
@@ -91,10 +103,6 @@ struct TranscriptPanel: View {
                     }
                 }
             }
-        }
-        .formStyle(.grouped)
-        .task {
-            if controller.engineStatus == .unknown { await controller.refreshStatus() }
         }
     }
 
@@ -146,7 +154,7 @@ struct TranscriptPanel: View {
             .help(allDeleted ? "Put the selected words back (⌫)" : "Cut the selected words: playback skips them (⌫)")
             .accessibilityIdentifier("deleteWordsButton")
 
-            Text(selected.isEmpty ? "Select words to cut them." : "\(selected.count) word\(selected.count == 1 ? "" : "s") selected")
+            Text(selected.isEmpty ? "Click words, or a line's empty space, to select." : "\(selected.count) word\(selected.count == 1 ? "" : "s") selected")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -181,8 +189,15 @@ private struct TranscriptRows: View {
         let firstWord = TranscriptRow.firstWordIndices(segments)
         let selection = model.selectedWordIDs
         let deleted = model.deletedWordIDs
-        ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
+        let highlights = model.review.reasons
+        // Clean leaves cut words out, and lines with nothing left.
+        let hidesDeleted = model.hidesRemoved
+        let shown = Array(segments.enumerated()).filter { entry in
+            !hidesDeleted || entry.element.words.isEmpty || !entry.element.words.allSatisfy { deleted.contains($0.id) }
+        }
+        ForEach(shown, id: \.element.id) { index, segment in
             let isActive = index == activeIndex
+            let start = hidesDeleted ? (segment.words.first { !deleted.contains($0.id) }?.start ?? segment.start) : segment.start
             TranscriptRow(
                 model: model,
                 state: TranscriptRow.RowState(
@@ -191,7 +206,11 @@ private struct TranscriptRows: View {
                     isActive: isActive,
                     activeWordID: isActive ? activeWordID : nil,
                     selection: selection,
-                    deleted: deleted
+                    deleted: deleted,
+                    highlights: highlights,
+                    hidesDeleted: hidesDeleted,
+                    start: start,
+                    shownStart: model.displaySeconds(forSource: start)
                 )
             )
             .equatable()
@@ -216,6 +235,14 @@ private struct TranscriptRow: View, Equatable {
         var activeWordID: String?
         var selection: Set<String>
         var deleted: Set<String>
+        /// Why words are highlighted by the AI review (`TimelineWord.id` → reason).
+        var highlights: [String: String]
+        /// Clean: cut words are left out.
+        var hidesDeleted: Bool
+        /// Where the line's time jumps to (full timeline seconds), and the
+        /// time it shows (edited time, in Clean).
+        var start: Double
+        var shownStart: Double
     }
 
     let model: EditorViewModel
@@ -231,8 +258,8 @@ private struct TranscriptRow: View, Equatable {
         let segment = state.segment
         let rightToLeft = Self.isRightToLeft(segment.text)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Button { model.seek(toSeconds: segment.start) } label: {
-                Text(TimeFormatting.string(segment.start, fractionDigits: 0))
+            Button { model.seek(toSeconds: state.start) } label: {
+                Text(TimeFormatting.string(state.shownStart, fractionDigits: 0))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -242,33 +269,90 @@ private struct TranscriptRow: View, Equatable {
             line
                 .multilineTextAlignment(rightToLeft ? .trailing : .leading)
                 .frame(maxWidth: .infinity, alignment: rightToLeft ? .trailing : .leading)
+                // The line's empty space selects the whole line; a word
+                // click selects that word (and wins, see `lineClicked`).
+                .contentShape(.rect)
+                .simultaneousGesture(TapGesture().onEnded { lineClicked() })
                 .tint(.primary)
                 .environment(\.openURL, OpenURLAction { [model] url in
                     guard url.scheme == Self.scheme, let word = Int(url.host() ?? url.path()) else { return .systemAction }
+                    model.lastWordClick = .now
                     let modifiers = NSEvent.modifierFlags
                     model.selectWord(at: word, extending: modifiers.contains(.shift), toggling: modifiers.contains(.command))
                     return .handled
                 })
         }
+        .help(tooltip ?? "")
+    }
+
+    /// A click anywhere on the line. Both it and a word's link see a click on
+    /// a word, in either order, so wait a moment: if no word was clicked, the
+    /// click was on empty space and selects the whole line.
+    private func lineClicked() {
+        let clickedAt = ContinuousClock.now
+        let segmentID = state.segment.id
+        Task { [model] in
+            try? await Task.sleep(for: Self.wordClickWindow)
+            if let word = model.lastWordClick, word > clickedAt - Self.wordClickWindow * 2 { return }
+            model.selectWords(inSegment: segmentID)
+        }
+    }
+
+    private static let wordClickWindow: Duration = .milliseconds(80)
+
+    /// Why the line's words are highlighted: one “passage”: reason per run of
+    /// highlighted words, or `nil` when nothing is.
+    private var tooltip: String? {
+        guard !state.highlights.isEmpty else { return nil }
+        var lines: [String] = []
+        var run: [String] = []
+        var runReason: String?
+        func flush() {
+            if let reason = runReason, !run.isEmpty { lines.append("“\(run.joined(separator: " "))”: \(reason)") }
+            run = []
+            runReason = nil
+        }
+        for word in state.segment.words {
+            if state.hidesDeleted, state.deleted.contains(word.id) { continue }
+            let reason = state.highlights[word.id]
+            if reason != runReason { flush() }
+            if let reason {
+                runReason = reason
+                run.append(word.text)
+            }
+        }
+        flush()
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     private var line: Text {
         let segment = state.segment
         guard !segment.words.isEmpty else { return Text(segment.text) }
         var text = AttributedString()
+        var isFirst = true
         for (offset, word) in segment.words.enumerated() {
-            if offset > 0 { text += AttributedString(" ") }
+            let isDeleted = state.deleted.contains(word.id)
+            // Clean leaves cut words out altogether.
+            if isDeleted, state.hidesDeleted { continue }
+            if !isFirst { text += AttributedString(" ") }
+            isFirst = false
             var run = AttributedString(word.text)
+            // The word's index among all the words, hidden ones included.
             run.link = URL(string: "\(Self.scheme)://\(state.firstWord + offset)")
-            if state.deleted.contains(word.id) {
+            let isHighlighted = state.highlights[word.id] != nil
+            if isDeleted {
                 // Cut words look disabled, like removed parts on the timeline.
                 run.strikethroughStyle = Text.LineStyle.single
                 run.foregroundColor = Color.primary.opacity(WaveformCanvas.disabledOpacity)
+            } else if isHighlighted {
+                run.foregroundColor = Color.red
             }
             if state.selection.contains(word.id) {
                 run.backgroundColor = Color.accentColor.opacity(0.35)
             } else if word.id == state.activeWordID {
                 run.backgroundColor = Color.accentColor.opacity(0.18)
+            } else if isHighlighted {
+                run.backgroundColor = Color.red.opacity(0.15)
             }
             if word.isApproximate {
                 run.underlineStyle = Text.LineStyle(pattern: .dot, color: Color.secondary)
@@ -293,6 +377,90 @@ private struct TranscriptRow: View, Equatable {
     static func isRightToLeft(_ text: String) -> Bool {
         guard let letter = text.unicodeScalars.first(where: { CharacterSet.letters.contains($0) }) else { return false }
         return (0x0590...0x08FF).contains(letter.value) || (0xFB1D...0xFEFC).contains(letter.value)
+    }
+}
+
+/// The AI review: a question about the transcript, typed or picked from the
+/// presets. The answer highlights words; nothing is cut until they're deleted.
+private struct ReviewControls: View {
+    let model: EditorViewModel
+    @Bindable var review: TranscriptReview
+    let hasTranscript: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("Ask", text: $review.prompt, prompt: Text("Ask about the transcript…"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(run)
+                    .accessibilityIdentifier("reviewPromptField")
+                Menu {
+                    ForEach(ReviewPreset.allCases) { preset in
+                        Button(preset.title) {
+                            review.prompt = preset.title
+                            model.runReview(preset.instruction)
+                        }
+                        .accessibilityIdentifier("reviewPreset-\(preset.rawValue)")
+                    }
+                } label: {
+                    Label("Presets", systemImage: "wand.and.stars")
+                }
+                .menuIndicator(.visible)
+                .fixedSize()
+                .disabled(!hasTranscript || review.isRunning)
+                .help("Ready-made questions: find repetition, pick the best or worst parts, grammar…")
+                .accessibilityIdentifier("reviewPresetsMenu")
+                if review.isRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityIdentifier("reviewProgress")
+                    Button("Cancel") { review.cancel() }
+                        .controlSize(.small)
+                } else {
+                    Button("Run", systemImage: "sparkles", action: run)
+                        .labelStyle(.iconOnly)
+                        .disabled(!canRun)
+                        .help("Highlight what this asks for (Return)")
+                        .accessibilityIdentifier("reviewRunButton")
+                }
+            }
+
+            if let error = review.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("reviewError")
+            } else if review.answeredInstruction != nil {
+                HStack {
+                    let count = review.highlights.count
+                    Text(count == 0 ? "Nothing found." : "\(count) highlight\(count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("reviewSummary")
+                    Spacer()
+                    if count > 0 {
+                        Button("Select") { model.selectHighlightedWords() }
+                            .controlSize(.small)
+                            .help("Select every highlighted word, so ⌫ cuts them")
+                            .accessibilityIdentifier("reviewSelectButton")
+                    }
+                    Button("Clear") { review.clear() }
+                        .controlSize(.small)
+                        .help("Remove the highlights")
+                        .accessibilityIdentifier("reviewClearButton")
+                }
+            }
+        }
+    }
+
+    private var canRun: Bool {
+        hasTranscript && !review.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func run() {
+        guard canRun else { return }
+        model.runReview(ReviewPreset.instruction(for: review.prompt))
     }
 }
 

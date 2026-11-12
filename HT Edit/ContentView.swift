@@ -12,6 +12,10 @@ struct ContentView: View {
     @State private var model: EditorViewModel
     @State private var isImporterPresented = false
     @State private var isInspectorPresented = true
+    /// The FCPXML being saved, while the save panel shows.
+    @State private var exportFile: FCPXMLFile?
+    @State private var isExporterPresented = false
+    @State private var isExporting = false
     /// The clip sidebar starts hidden; the sidebar button or ⌃⌘S shows it.
     @State private var columnVisibility = NavigationSplitViewVisibility.detailOnly
 
@@ -34,6 +38,19 @@ struct ContentView: View {
                     editor
                 } else {
                     emptyState
+                }
+            }
+            // On its own view: a file importer and exporter on the same view
+            // don't both present.
+            .fileExporter(
+                isPresented: $isExporterPresented,
+                document: exportFile,
+                contentType: FCPXMLFile.contentType,
+                defaultFilename: model.exportName
+            ) { result in
+                exportFile = nil
+                if case .failure(let error) = result {
+                    model.errorMessage = "Couldn't save the FCPXML: \(error.localizedDescription)"
                 }
             }
             .inspector(isPresented: inspectorBinding) {
@@ -144,6 +161,18 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Picker("Layout", selection: $model.layout) {
+                ForEach(EditorLayout.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .disabled(!model.hasMedia)
+            .help("Full shows removed parts grayed out; Clean leaves them out of the timeline and the transcript")
+            .accessibilityIdentifier("layoutPicker")
+        }
+
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Add Videos", systemImage: "plus") {
                 isImporterPresented = true
@@ -152,11 +181,12 @@ struct ContentView: View {
             .help("Add videos to the timeline (⌘O)")
             .accessibilityIdentifier("addButton")
 
-            Button(model.isPlaying ? "Pause" : "Play", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
-                model.togglePlayback()
+            Button("Export FCPXML", systemImage: "square.and.arrow.up") {
+                exportFCPXML()
             }
-            .disabled(!model.hasMedia)
-            .help("Play / Pause (Space)")
+            .disabled(model.placedClips.isEmpty || isExporting)
+            .help("Export the edit as FCPXML for Final Cut Pro")
+            .accessibilityIdentifier("exportButton")
 
             Button("Inspector", systemImage: "sidebar.trailing") {
                 isInspectorPresented.toggle()
@@ -167,6 +197,21 @@ struct ContentView: View {
     }
 
     // MARK: Helpers
+
+    /// Builds the FCPXML, then asks where to save it.
+    private func exportFCPXML() {
+        guard !isExporting else { return }
+        isExporting = true
+        Task {
+            defer { isExporting = false }
+            do {
+                exportFile = FCPXMLFile(text: try await model.makeFCPXML())
+                isExporterPresented = true
+            } catch {
+                model.errorMessage = "Couldn't export: \(error.localizedDescription)"
+            }
+        }
+    }
 
     private var inspectorBinding: Binding<Bool> {
         Binding(
@@ -189,12 +234,14 @@ struct ContentView: View {
 }
 
 /// The playhead time. Its own view, so 30 Hz time updates redraw only this
-/// label, never the editor around it.
+/// label, never the editor around it. In Clean, it shows time in the edit.
 private struct TransportTimeLabel: View {
     let model: EditorViewModel
 
     var body: some View {
-        Text("\(TimeFormatting.string(model.currentTime, fractionDigits: 2)) / \(TimeFormatting.string(model.timelineDuration, fractionDigits: 2))")
+        let now = model.currentTime.seconds
+        let shown = now.isFinite ? model.displaySeconds(forSource: now) : 0
+        Text("\(TimeFormatting.string(shown, fractionDigits: 2)) / \(TimeFormatting.string(model.displayDuration, fractionDigits: 2))")
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .accessibilityIdentifier("transportTime")

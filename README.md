@@ -34,12 +34,24 @@ xattr -dr com.apple.quarantine "/Applications/HT Edit.app"
 - **One seamless timeline:** a yellow line marks where each clip starts.
 - **Clip sidebar:** shows each clip's thumbnail, name and length. Drag clips to reorder them. It's hidden at launch: show it with the sidebar button or **View ▸ Show Sidebar** (⌃⌘S).
 - **Vertical video:** if the video is taller than it is wide, the player sits beside the timeline instead of above it. This is automatic.
-- **Live settings:** threshold (dB), padding start and padding end. The timeline updates instantly.
-- **Removed parts look disabled:** everything playback skips (silences, cut words, and parts without speech) is grayed out on the timeline, at 30% opacity. Each part has its own gray bar along the top, split wherever the reason changes: a pause can read *No speech*, *Silence*, *No speech*. Rest the pointer on a bar to see why that part was removed, with a **Preview** button that plays just that part; the card goes away as soon as the pointer leaves it.
+- **Live settings:** threshold (dB), padding start and padding end. **Padding start** keeps audio just before speech starts, and **padding end** keeps audio just after it ends. The timeline updates instantly.
+- **One inspector:** the silence settings are on top and the transcript is right below them, in one scrolling panel with no tabs.
+- **Full or Clean:** the switch at the top of the window picks how removed parts show.
+  - **Full** shows everything, with removed parts grayed out and cut words struck through.
+  - **Clean** leaves them out. The timeline shows only what's kept, back to back, and its time is the edit's time. Cut words, and lines with nothing left, disappear from the transcript.
+- **Removed parts look disabled (in Full):** everything playback skips (silences, cut words, and parts without speech) is grayed out on the timeline, at 30% opacity. Each part has its own gray bar along the top, split wherever the reason changes: a pause can read *No speech*, *Silence*, *No speech*. Rest the pointer on a bar to see why that part was removed, with a **Preview** button that plays just that part; the card goes away as soon as the pointer leaves it.
 - **Playback:** always skips the removed parts.
-- **Automatic transcript with timestamps:** each clip is transcribed as soon as it's imported; there's no button to press. A **Retry** button appears in the **Transcript** tab only if transcription failed or was cancelled. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
-- **Only speech is kept:** once a clip's transcript and word timing are done, everything that isn't speech is cut: before the first word, after the last, and every pause of 0.3 s or more between words (0.1 s is kept next to each word). Silences and noises that aren't words go too. Turn it off with **Cut parts without speech** in the **Silence** tab.
-- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Then press **⌫**: playback skips the deleted words, and they're struck through and dimmed in the transcript. Press **⌫** again on cut words to put them back, or use **Restore All**.
+- **Automatic transcript with timestamps:** each clip is transcribed as soon as it's imported; there's no button to press. A **Retry** button appears in the inspector only if transcription failed or was cancelled. Each line shows when it was spoken. Click a line's time to jump there. The line that's playing is highlighted, and **Copy** puts the whole transcript, with timestamps, on the clipboard.
+- **Only speech is kept:** once a clip's transcript and word timing are done, everything that isn't speech is cut: before the first word, after the last, and every pause of 0.3 s or more between words (0.1 s is kept next to each word). Silences and noises that aren't words go too. Turn it off with **Cut parts without speech** in the inspector's **Speech** section.
+- **Cut by deleting words:** click a word in the transcript to select it (and jump there). Shift-click extends the selection and ⌘-click adds or removes one word. Click a line's empty space, not a word, to select the whole line. Then press **⌫**: playback skips the deleted words, and they're struck through and dimmed in the transcript. Press **⌫** again on cut words to put them back, or use **Restore All**.
+- **AI Review:** type a question about the transcript in the inspector, or pick one from **Presets**: Find repetition, Pick best parts, Pick worst parts, Grammar check, Filler words, Off-topic.
+  - The words it points at turn red. Rest the pointer on a line to see why each one was picked.
+  - **Select** selects every highlighted word, so **⌫** cuts them all at once. **Clear** removes the highlights.
+  - Nothing is cut until you delete words. It runs on Antigravity, with the model picked for transcription, and sends only the transcript text, never the audio.
+- **Export to Final Cut Pro:** the **Export** button in the toolbar saves the edit as an `.fcpxml` file (FCPXML 1.10).
+  - It holds one project with a clip for each kept piece, pointing at your original files. Markers come along too.
+  - Cuts are rounded to the nearest video frame, and the file's start timecode is respected.
+  - Final Cut Pro, DaVinci Resolve and other editors can open it.
 - **Markers:** press **M** to drop a blue marker at the playhead.
 - **Keyboard:** **Space** plays and pauses, **M** adds a marker and **⌫** cuts or restores the selected words, whatever has focus, except while typing in a text field. (While the clip sidebar has focus, ⌫ still deletes clips.)
 - **Smooth scrolling during playback:** the timeline pages along with the playhead, but once you scroll it yourself it stays where you put it until you start playback again.
@@ -52,7 +64,7 @@ Transcription runs through your own **Antigravity CLI (`agy`)**, under your Goog
 **One-time setup:** install the Antigravity CLI and sign in once with your Google account (run `agy` in Terminal). That's all.
 
 **Every time:** nothing to do. Each clip is transcribed as soon as it's imported.
-- Optional: pick another **model** in the **Transcript** tab. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered, and picking another model transcribes the clips again.
+- Optional: pick another **model** in the inspector's **Transcription** section. Only models that can transcribe audio with timestamps are listed, and the cheapest one your account offers is selected by default. Your choice is remembered, and picking another model transcribes the clips again.
 - If something goes wrong (Antigravity isn't signed in, or a part failed), the tab says why and shows **Retry**.
 
 How it works:
@@ -97,7 +109,10 @@ Running `agy` and reading your sign-in means HT Edit runs **without the App Sand
 | Waveform | `Waveform/WaveformSampler.swift`, `Views/WaveformCanvas.swift` (draws only what's visible) |
 | Transcription | `Transcription/AgyEngine.swift` (runs `agy`, parses its JSON), `Transcriber.swift` (chunks, concurrency, retries), `AudioChunkExporter.swift`, `TranscriptionController.swift`, `TranscriptionModel.swift` (model catalog), `TranscriptCache.swift`, `Model/Transcript.swift` |
 | Word timing and cuts | `Transcription/WordAligner.swift` (runs `align.py` through `uv`), `Transcription/align.py` (MMS forced alignment), `Model/TranscriptWords.swift`, `Model/WordCuts.swift` (cuts snapped to the quietest point of each pause), `Model/NonSpeech.swift` (what isn't speech), `Model/RemovedRanges.swift` (everything removed, and why) |
-| UI | `ContentView.swift`, `Views/*` (including `InspectorView`, `TranscriptPanel`, `EditorKeyMonitor` for Space/M/⌫, `TimelineZoom`), `Model/Marker.swift`, `App/WarmUp.swift` |
+| Clean layout | `Model/EditMap.swift` (what's kept, back to back: maps the full timeline to the edit) |
+| AI review | `Transcription/TranscriptReview.swift` (presets, highlights), `AgyEngine.swift` (`review`: runs `agy` on the transcript text) |
+| Export | `Model/EditDecisions.swift` (each clip's kept pieces), `Export/FCPXMLExporter.swift` (FCPXML 1.10, frame-snapped, start timecode) |
+| UI | `ContentView.swift` (toolbar: Full/Clean, Export), `Views/*` (including `InspectorView`, `SilenceSections`, `TranscriptSections`, `EditorKeyMonitor` for Space/M/⌫, `TimelineZoom`), `Model/Marker.swift`, `App/WarmUp.swift` |
 
 Project settings: Swift 6, MainActor-by-default, macOS 27.
 
@@ -118,13 +133,13 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 
 ### Releases
 
-`.github/workflows/release.yml` builds the app on GitHub and attaches a `.dmg` and a `.zip` to a GitHub Release. It's ad-hoc signed, so no Apple developer account is needed. To publish a version:
+`.github/workflows/release.yml` builds the app on GitHub and attaches a `.dmg` and a `.zip` to a GitHub Release. It's ad-hoc signed, so no Apple developer account is needed. To publish a version, push a new tag (use a higher number each time):
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
-Or run the **Release** workflow from the Actions tab and type a tag.
+Or open the **Actions** tab, pick **Release**, click **Run workflow**, choose the branch and type a tag such as `v0.2.0`. The tag is created on that branch's latest commit. Either way, the release shows up under **Releases** a few minutes later, with `HT-Edit-<tag>.dmg` and `.zip` attached.
 
 ### Diagnostics
 

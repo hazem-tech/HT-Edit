@@ -23,9 +23,23 @@ nonisolated struct FakeTranscriptionEngine: TranscriptionEngine {
     }
 }
 
+/// Highlights the first word, whatever the question.
+nonisolated struct FakeReviewEngine: TranscriptReviewEngine {
+    static let reason = "Fake review finding."
+
+    func review(transcript: String, instruction: String, model: String) async throws -> [ReviewFinding] {
+        try await Task.sleep(for: .milliseconds(200))
+        return [ReviewFinding(first: 0, last: 0, reason: Self.reason)]
+    }
+}
+
 extension UITestSupport {
     static func fakeTranscriptionEngine() -> (any TranscriptionEngine)? {
         UserDefaults.standard.bool(forKey: "UITestFakeTranscription") ? FakeTranscriptionEngine() : nil
+    }
+
+    static func fakeReviewEngine() -> (any TranscriptReviewEngine)? {
+        UserDefaults.standard.bool(forKey: "UITestFakeTranscription") ? FakeReviewEngine() : nil
     }
 }
 #endif
