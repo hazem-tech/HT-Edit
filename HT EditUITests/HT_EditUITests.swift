@@ -174,11 +174,20 @@ final class HT_EditUITests: XCTestCase {
 
         let time = app.staticTexts["transportTime"]
         expect(time.waitForExistence(timeout: 5), "Time label not found", app)
-        let before = time.label
+        let playPause = app.buttons["playPauseButton"]
+        let shownTime = { (time.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? time.label }
+        let before = shownTime()
         app.typeKey(" ", modifierFlags: [])
 
-        let moved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", before), object: time)
-        expect(XCTWaiter().wait(for: [moved], timeout: 5) == .completed, "Space didn't start playback (time stayed \(before))", app)
+        // Playback is short (the fixture's speech is under a second), so poll
+        // for either sign that it started: the pause button, or a new time.
+        let deadline = Date().addingTimeInterval(5)
+        var started = false
+        while !started, Date() < deadline {
+            started = playPause.label == "Pause" || shownTime() != before
+            if !started { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        expect(started, "Space didn't start playback (time stayed \(before))", app)
         expect(app.clipRows.count == 1, "Space must not touch the clip list", app)
     }
 
