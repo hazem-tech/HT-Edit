@@ -487,7 +487,7 @@ private struct ReviewControls: View {
                 .menuIndicator(.visible)
                 .fixedSize()
                 .disabled(!hasTranscript || review.isRunning)
-                .help("Ready-made questions: find repetition, pick the best or worst parts, grammar…")
+                .help("Ready-made questions: find repetition, pick the worst parts (fillers included), grammar check")
                 .accessibilityIdentifier("reviewPresetsMenu")
                 if review.isRunning {
                     ProgressView()

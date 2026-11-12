@@ -14,22 +14,16 @@ import os
 /// A ready-made question for the transcript review.
 nonisolated enum ReviewPreset: String, CaseIterable, Identifiable, Sendable {
     case repetition
-    case bestParts
     case worstParts
     case grammar
-    case fillers
-    case offTopic
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .repetition: "Find repetition"
-        case .bestParts: "Pick best parts"
         case .worstParts: "Pick worst parts"
         case .grammar: "Grammar check"
-        case .fillers: "Filler words"
-        case .offTopic: "Off-topic"
         }
     }
 
@@ -45,16 +39,10 @@ nonisolated enum ReviewPreset: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .repetition:
             "Find repetition: sentences or phrases said more than once (retakes, false starts, restarts). Point at every take except the best one, and say which take it repeats."
-        case .bestParts:
-            "Pick the best parts: the strongest, clearest and most engaging passages worth keeping in a short cut."
         case .worstParts:
-            "Pick the worst parts: weak, rambling, unclear or boring passages that should be cut."
+            "Pick the worst parts, everything that should be cut: filler words and verbal tics (um, uh, like, you know, basically, and their equivalents in the spoken language), stumbles, and weak, rambling, unclear or off-topic passages. Say which it is in the reason."
         case .grammar:
             "Grammar check: point at words or phrases with grammar, wording or pronunciation mistakes, and give the correction in the reason."
-        case .fillers:
-            "Find filler words and verbal tics (um, uh, like, you know, so, basically, and their equivalents in the spoken language)."
-        case .offTopic:
-            "Find passages that are off-topic or tangents that don't serve the main point of the video."
         }
     }
 }
