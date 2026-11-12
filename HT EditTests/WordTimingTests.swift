@@ -257,13 +257,14 @@ struct WordTimingTranscriberTests {
         #expect(aligner.callCount == 2)
     }
 
-    @Test func aFailingAlignerKeepsTheTextAndIsntCached() async throws {
+    @Test func aFailingAlignerKeepsTheTextAndCachesOnlyTheText() async throws {
         let directory = makeTemporaryDirectory("align-fails")
         defer { try? FileManager.default.removeItem(at: directory) }
         let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 7)
         let cache = TranscriptCache(directory: directory.appending(path: "cache"))
         let engine = ScriptedEngine()
-        let transcriber = Transcriber(engine: engine, cache: cache, chunkLength: 3, aligner: ScriptedAligner(failure: WordAlignerError.timedOut))
+        let aligner = ScriptedAligner(failure: WordAlignerError.timedOut)
+        let transcriber = Transcriber(engine: engine, cache: cache, chunkLength: 3, aligner: aligner)
         let job = TranscriptionJob(clipID: UUID(), url: audio, duration: 7, chunks: nil)
 
         let events = try await collect(transcriber.run([job], model: "m", context: ""))
@@ -272,8 +273,42 @@ struct WordTimingTranscriberTests {
         #expect(reportedFailure)
         #expect(keptText)
 
-        _ = try await collect(transcriber.run([job], model: "m", context: ""))
-        #expect(engine.calls.count == 4, "estimated word times aren't cached")
+        let second = try await collect(transcriber.run([job], model: "m", context: ""))
+        let cachedText = second.contains { if case .cached = $0 { true } else { false } }
+        #expect(cachedText, "the text shows at once")
+        #expect(engine.calls.count == 2, "the engine isn't asked for the same text again")
+        #expect(aligner.callCount == 4, "the word times are tried again")
+    }
+
+    @Test func cachedTextIsOnlyAlignedAgain() async throws {
+        let directory = makeTemporaryDirectory("align-cached-text")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audio = try await MediaFixtures.make(.audioOnly, in: directory, duration: 7)
+        let cache = TranscriptCache(directory: directory.appending(path: "cache"))
+        let engine = ScriptedEngine()
+        let job = TranscriptionJob(clipID: UUID(), url: audio, duration: 7, chunks: nil)
+
+        // Transcribed before word timing was set up.
+        _ = try await collect(Transcriber(engine: engine, cache: cache, chunkLength: 3).run([job], model: "m", context: ""))
+        #expect(engine.calls.count == 2)
+
+        let aligner = ScriptedAligner()
+        let transcriber = Transcriber(engine: engine, cache: cache, chunkLength: 3, aligner: aligner)
+        let events = try await collect(transcriber.run([job], model: "m", context: ""))
+        let measured = events.compactMap { event -> [TranscriptSegment]? in
+            if case .wordsMeasured(_, let segments) = event { return segments }
+            return nil
+        }
+        #expect(engine.calls.count == 2, "no new transcription")
+        #expect(aligner.callCount == 2)
+        #expect(measured.first?.count == 2)
+        let allAligned = measured.first?.allSatisfy { $0.words?.isEmpty == false } ?? false
+        #expect(allAligned)
+
+        // Now the measured transcript is cached too.
+        let third = try await collect(transcriber.run([job], model: "m", context: ""))
+        #expect(third.count == 1)
+        #expect(aligner.callCount == 2)
     }
 
     @Test func anAlignerThatIsntReadyIsSkipped() async throws {

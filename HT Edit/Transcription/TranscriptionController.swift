@@ -222,6 +222,9 @@ final class TranscriptionController {
             guard wanted.contains(clipID), plannedChunks[clipID] != nil else { return }
             failedChunks[clipID, default: []].append(chunk)
             lastFailureMessage = message
+        case .wordsMeasured(let clipID, let segments):
+            guard wanted.contains(clipID) else { return }
+            transcripts[clipID] = segments
         case .wordTimingFailed(let clipID, _, let message):
             guard wanted.contains(clipID) else { return }
             wordTimingFailure = message

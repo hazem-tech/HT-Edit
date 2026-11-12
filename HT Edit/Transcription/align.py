@@ -5,6 +5,7 @@
 #     "torchaudio==2.8.0",
 #     "uroman==1.3.1.1",
 #     "numpy",
+#     "truststore>=0.10",
 # ]
 # ///
 """Word timing for HT Edit: forced alignment of known text to audio.
@@ -180,6 +181,22 @@ def align_segment(model, device, dictionary, romanizer, samples, segment, paddin
     return {"words": result}
 
 
+def trust_the_mac():
+    """Check HTTPS certificates with the Mac's own trust store.
+
+    uv's Python carries its own copy of the root certificates and never reads
+    the Keychain. When that copy is out of date, downloading the model fails
+    with CERTIFICATE_VERIFY_FAILED ("certificate has expired"). truststore
+    makes every download here use the same trust as Safari.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception as error:  # noqa: BLE001 - fall back to Python's own certificates
+        log(f"Using Python's own certificates ({error})")
+
+
 def main():
     if len(sys.argv) != 3:
         log("usage: align.py AUDIO.wav REQUEST.json")
@@ -191,6 +208,7 @@ def main():
     segments = request.get("segments") or []
 
     log(f"Aligning {len(segments)} segment(s) in {len(samples) / SAMPLE_RATE:.1f}s of audio")
+    trust_the_mac()
     model, dictionary, device = load_model()
     romanizer = Romanizer(dictionary.keys())
 
