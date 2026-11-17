@@ -1,12 +1,24 @@
 name: Release
 
-# Builds HT Edit and attaches it to a GitHub Release.
+# Builds HT Edit and attaches it to a GitHub Release, with the appcast that
+# the app's built-in updater (Sparkle) reads.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag v0.1.1 && git push origin v0.1.1
 #
 # or run it by hand from the Actions tab (it then needs a tag name).
-# The app is ad-hoc signed, not notarized: no Apple developer account needed.
-# On first open macOS blocks it; see "Install" in the README.
+#
+# Repository secrets (Settings ▸ Secrets and variables ▸ Actions):
+# - CODESIGN_P12_BASE64, CODESIGN_P12_PASSWORD: a self-signed code-signing
+#   certificate. Every release is signed with it, so macOS sees the same app
+#   from one version to the next (permissions stay granted). Without them the
+#   app is ad-hoc signed, as before.
+# - SPARKLE_PRIVATE_KEY: the EdDSA key updates are signed with. Its public half
+#   is SUPublicEDKey in Config/HT-Edit-Info.plist. Without it there's no
+#   appcast, and the app can't update itself to this release.
+#
+# Not notarized (that needs a paid Apple developer account): macOS blocks the
+# first install once; see "Install" in the README. Updates installed from
+# inside the app aren't blocked.
 
 on:
   push:
@@ -14,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (created on the current commit if missing), e.g. v0.1.0'
+        description: 'Tag to release (created on the current commit if missing), e.g. v0.1.1'
         required: true
 
 permissions:
@@ -24,6 +36,7 @@ env:
   PROJECT: HT Edit.xcodeproj
   SCHEME: HT Edit
   SIGNING: CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+  REPOSITORY_URL: https://github.com/${{ github.repository }}
 
 jobs:
   release:
@@ -42,25 +55,106 @@ jobs:
       - name: Build
         run: |
           set -o pipefail
+          # CURRENT_PROJECT_VERSION is what Sparkle compares: it must grow with every release.
           xcodebuild archive \
             -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
             -archivePath build/HTEdit.xcarchive \
-            MARKETING_VERSION="$VERSION" \
+            -derivedDataPath build/DerivedData \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$VERSION" \
+            ENABLE_HARDENED_RUNTIME=NO \
             $SIGNING \
             2>&1 | xcbeautify --renderer github-actions
+
+      - name: Sign
+        env:
+          CODESIGN_P12_BASE64: ${{ secrets.CODESIGN_P12_BASE64 }}
+          CODESIGN_P12_PASSWORD: ${{ secrets.CODESIGN_P12_PASSWORD }}
+        run: |
+          set -e
+          app="build/HTEdit.xcarchive/Products/Applications/HT Edit.app"
+          if [ -z "$CODESIGN_P12_BASE64" ]; then
+            echo "::warning::CODESIGN_P12_BASE64 isn't set: the app stays ad-hoc signed."
+            codesign --verify --deep --strict "$app"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "$CODESIGN_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CODESIGN_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # A self-signed certificate isn't trusted by default; codesign needs it to be.
+          security find-certificate -c "HT Edit Self-Signed" -p "$keychain" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          rm "$RUNNER_TEMP/cert.p12"
+
+          # Sign inside out: Sparkle's helpers, the framework, then the app.
+          identity="HT Edit Self-Signed"
+          sparkle="$app/Contents/Frameworks/Sparkle.framework"
+          if [ -d "$sparkle" ]; then
+            find "$sparkle/Versions/B" -depth \( -name "*.xpc" -o -name "*.app" \) -print0 | while IFS= read -r -d '' item; do
+              codesign --force --sign "$identity" --keychain "$keychain" "$item"
+            done
+            [ -f "$sparkle/Versions/B/Autoupdate" ] && codesign --force --sign "$identity" --keychain "$keychain" "$sparkle/Versions/B/Autoupdate"
+            codesign --force --sign "$identity" --keychain "$keychain" "$sparkle"
+          fi
+          codesign --force --sign "$identity" --keychain "$keychain" --preserve-metadata=entitlements "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --requirements - "$app"
 
       - name: Package
         run: |
           set -e
           app="build/HTEdit.xcarchive/Products/Applications/HT Edit.app"
-          codesign --verify --deep --strict "$app"
           mkdir -p dist dmg
           ditto -c -k --keepParent "$app" "dist/HT-Edit-$TAG.zip"
           ditto "$app" "dmg/HT Edit.app"
           ln -s /Applications dmg/Applications
           hdiutil create -volname "HT Edit" -srcfolder dmg -ov -format UDZO "dist/HT-Edit-$TAG.dmg"
           ls -lh dist
+
+      - name: Appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -e
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY isn't set: no appcast, so the app won't offer this release as an update."
+            exit 0
+          fi
+          # Sparkle's tools come with its Swift package.
+          sign_update="$(find build/DerivedData/SourcePackages/artifacts -type f -name sign_update -perm -u+x | head -1)"
+          [ -n "$sign_update" ] || { echo "::error::sign_update not found in the Sparkle package"; exit 1; }
+          key_file="$RUNNER_TEMP/sparkle_key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key_file"
+          zip="dist/HT-Edit-$TAG.zip"
+          signature="$("$sign_update" --ed-key-file "$key_file" "$zip")"
+          rm "$key_file"
+          echo "$signature"
+          cat > dist/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>HT Edit</title>
+              <link>$REPOSITORY_URL/releases</link>
+              <item>
+                <title>HT Edit $VERSION</title>
+                <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <link>$REPOSITORY_URL/releases/tag/$TAG</link>
+                <sparkle:version>$VERSION</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+                <enclosure url="$REPOSITORY_URL/releases/download/$TAG/HT-Edit-$TAG.zip" type="application/octet-stream" $signature />
+              </item>
+            </channel>
+          </rss>
+          EOF
+          xmllint --noout dist/appcast.xml
+          cat dist/appcast.xml
 
       - name: Publish
         env:

@@ -6,6 +6,10 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A115580130958EF6001A7F76 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A115580330958EF6001A7F76 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		A115571130958EF6001A7F76 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -51,6 +55,7 @@
 		A115570030958EF3001A7F76 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				A115580130958EF6001A7F76 /* Sparkle in Frameworks */,
 			);
 		};
 		A115570D30958EF6001A7F76 /* Frameworks */ = {
@@ -103,6 +108,9 @@
 				A115570530958EF3001A7F76 /* HT Edit */,
 			);
 			name = "HT Edit";
+			packageProductDependencies = (
+				A115580330958EF6001A7F76 /* Sparkle */,
+			);
 			productName = "HT Edit";
 			productReference = A115570330958EF3001A7F76 /* HT Edit.app */;
 			productType = "com.apple.product-type.application";
@@ -181,6 +189,9 @@
 			);
 			mainGroup = A11556FA30958EF3001A7F76;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A115580230958EF6001A7F76 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A115570430958EF3001A7F76 /* Products */;
 			projectDirPath = "";
@@ -376,6 +387,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/HT-Edit-Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -407,6 +419,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/HT-Edit-Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -541,6 +554,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A115580230958EF6001A7F76 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A115580330958EF6001A7F76 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A115580230958EF6001A7F76 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A11556FB30958EF3001A7F76 /* Project object */;
 	validationLevel = 1;

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle: where updates are announced (each release's appcast.xml), and the
+	     public half of the key every update is signed with. -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/hazem-tech/HT-Edit/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>+xuWyF03M+CptqLCI4wCWR6FQ/n/mFm2OAnFcj+wN3A=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>

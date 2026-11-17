@@ -28,6 +28,8 @@ Or, in Terminal:
 xattr -dr com.apple.quarantine "/Applications/HT Edit.app"
 ```
 
+That's only for the first install. After that, HT Edit updates itself: it checks for a new version in the background (and on demand with **HT Edit ▸ Check for Updates…**), downloads it, checks it's signed with HT Edit's own key, installs it and relaunches. Updates installed this way aren't blocked by macOS.
+
 ## Features
 
 - **Import:** ⌘O, the **+** toolbar button, or drag and drop. You can import several files at once; new clips are added to the end.
@@ -133,7 +135,11 @@ Every push runs `.github/workflows/ci.yml` on GitHub's `xcode-27` runner (macOS 
 
 ### Releases
 
-`.github/workflows/release.yml` builds the app on GitHub and attaches a `.dmg` and a `.zip` to a GitHub Release. It's ad-hoc signed, so no Apple developer account is needed. To publish a version, push a new tag (use a higher number each time):
+`.github/workflows/release.yml` builds the app on GitHub and attaches a `.dmg`, a `.zip` and `appcast.xml` to a GitHub Release. No Apple developer account is needed.
+
+- **Signing:** every release is signed with the same self-signed certificate, so macOS sees one app from version to version. It needs the repository secrets `CODESIGN_P12_BASE64` and `CODESIGN_P12_PASSWORD`; without them the app is ad-hoc signed.
+- **Updates:** the app's updater ([Sparkle](https://sparkle-project.org)) reads `appcast.xml` from the latest release (`SUFeedURL` in `Config/HT-Edit-Info.plist`). The workflow signs each update's `.zip` with the secret `SPARKLE_PRIVATE_KEY`, and the app only installs updates that match the public key (`SUPublicEDKey`). Never lose or change that key: installed copies could no longer update.
+- The version (`v0.2.0` → `0.2.0`) becomes both the app's version and the build number Sparkle compares, so each release needs a higher number. To publish a version, push a new tag (use a higher number each time):
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0

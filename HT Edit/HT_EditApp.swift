@@ -10,6 +10,8 @@ import SwiftUI
 
 @main
 struct HT_EditApp: App {
+    private let updater = SoftwareUpdater()
+
     init() {
         // Lets SwiftUI observe AVPlayer state (e.g. timeControlStatus) via Swift Observation.
         // Must be set before any player is created.
@@ -24,6 +26,7 @@ struct HT_EditApp: App {
         .commands {
             // View ▸ Show Sidebar (⌃⌘S) for the clip sidebar, hidden at launch.
             SidebarCommands()
+            CheckForUpdatesCommand(updater: updater)
         }
     }
 }
